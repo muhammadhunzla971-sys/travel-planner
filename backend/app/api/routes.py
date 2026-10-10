@@ -1,8 +1,14 @@
-"""API routes. Step 2: a budget preview so we can test the models/allocator online."""
-from fastapi import APIRouter
+"""API routes."""
+from fastapi import APIRouter, HTTPException
 
 from app.models.request import TripRequest
 from app.services.budget import CostLevel, allocate_budget
+from app.services.trip_data import (
+    DataUnavailable,
+    DestinationNotFound,
+    TripData,
+    gather_trip_data,
+)
 
 router = APIRouter()
 
@@ -22,3 +28,15 @@ async def budget_preview(request: TripRequest, cost_level: CostLevel = "medium")
         "percentages": allocation.percentages(),
         "currency": allocation.currency,
     }
+
+
+@router.post("/tools/preview", response_model=TripData)
+async def tools_preview(request: TripRequest) -> TripData:
+    """Run the data layer (geocoding, currency, weather, places, flights, stays)
+    for a trip request. Use this to check which data is live vs estimated."""
+    try:
+        return await gather_trip_data(request)
+    except DestinationNotFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
