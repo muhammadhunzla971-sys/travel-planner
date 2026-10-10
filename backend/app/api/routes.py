@@ -1,8 +1,10 @@
 """API routes."""
 from fastapi import APIRouter, HTTPException
 
+from app.llm.client import check as llm_check
 from app.models.request import TripRequest
 from app.services.budget import CostLevel, allocate_budget
+from app.services.single_pass import SinglePassResult, run_single_pass
 from app.services.trip_data import (
     DataUnavailable,
     DestinationNotFound,
@@ -36,6 +38,24 @@ async def tools_preview(request: TripRequest) -> TripData:
     for a trip request. Use this to check which data is live vs estimated."""
     try:
         return await gather_trip_data(request)
+    except DestinationNotFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/llm/check")
+async def llm_health() -> dict:
+    """Is the Groq key configured and working? (Never returns the key.)"""
+    return await llm_check()
+
+
+@router.post("/agents/preview", response_model=SinglePassResult)
+async def agents_preview(request: TripRequest) -> SinglePassResult:
+    """Run every agent once (flight, stay, activities, critic) and show what each proposed.
+    The negotiation loop that fixes conflicts comes in Step 5."""
+    try:
+        return await run_single_pass(request)
     except DestinationNotFound as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DataUnavailable as exc:

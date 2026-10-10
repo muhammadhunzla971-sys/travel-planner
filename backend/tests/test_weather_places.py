@@ -2,7 +2,12 @@ from datetime import date, timedelta
 
 from app.models.plan import DataSource
 from app.tools.http import ProviderError
-from app.tools.places import categorize, find_attractions, generic_activities
+from app.tools.places import (
+    _rank_score,
+    categorize,
+    find_attractions,
+    generic_activities,
+)
 from app.tools.weather import (
     DayWeather,
     describe_code,
@@ -10,7 +15,7 @@ from app.tools.weather import (
     one_year_earlier,
     summarize_weather,
 )
-from tests.fakes import FORECAST, ISTANBUL, WIKI_ISTANBUL, patch_all
+from tests.fakes import FORECAST, ISTANBUL, LONG, WIKI_ISTANBUL, patch_all, wiki_pages
 
 
 # ---- weather -------------------------------------------------------------
@@ -68,12 +73,32 @@ async def test_attractions_live_filtered_and_sorted(monkeypatch):
     assert "Istanbul University" not in names
     assert "Some Short Page" not in names and "No Coordinates Place" not in names
     assert len(places) == 5 and all(p.source == DataSource.live for p in places)
-    distances = [p.distance_km for p in places]
-    assert distances == sorted(distances)
+    scores = [_rank_score(p) for p in places]
+    assert scores == sorted(scores, reverse=True)
     by_name = {p.name: p for p in places}
     assert by_name["Hagia Sophia Museum"].category == "museum"
     assert by_name["Hagia Sophia Museum"].est_entry_usd > 0
     assert by_name["Blue Mosque"].category == "religious"
+
+
+async def test_popular_far_place_beats_obscure_near_place(monkeypatch):
+    data = wiki_pages(("Obscure Chapel", LONG, 41.0140, 28.9500), ("Famous Tower", LONG, 41.09, 28.98))
+    pages = data["query"]["pages"]
+    pages[0]["pageviews"] = {"2026-09-01": 20}
+    pages[1]["pageviews"] = {"2026-09-01": 90000, "2026-09-02": 80000}
+    patch_all(monkeypatch, {"wikipedia": data})
+    places = await find_attractions(ISTANBUL)
+    assert places[0].name == "Famous Tower" and places[0].popularity == 170000
+
+
+async def test_city_itself_and_neighbourhoods_are_not_attractions(monkeypatch):
+    data = wiki_pages(
+        ("Istanbul", "Istanbul is the largest city in Turkey and a megacity of many people.", 41.01, 28.95),
+        ("Aksaray, Fatih", "Aksaray is a neighbourhood in the municipality of Fatih, Istanbul.", 41.01, 28.95),
+        ("Galata Tower", LONG, 41.0256, 28.9744))
+    patch_all(monkeypatch, {"wikipedia": data})
+    names = [p.name for p in await find_attractions(ISTANBUL) if p.source.value == "live"]
+    assert names == ["Galata Tower"]
 
 
 async def test_attractions_topped_up_when_few_live_results(monkeypatch):

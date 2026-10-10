@@ -2,6 +2,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.config import get_settings
 from app.models import TripRequest
 from app.tools.cache import cache
 
@@ -31,3 +32,13 @@ def _clean_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_llm(monkeypatch):
+    """Tests must never call the real Groq API, even if a key exists on this machine."""
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()

@@ -16,10 +16,13 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
 
     # LLM (hosted API only - nothing runs locally)
-    llm_provider: str = "groq"  # groq | gemini
-    llm_model: str = "llama-3.3-70b-versatile"
-    groq_api_key: str = ""
-    gemini_api_key: str = ""
+    # NOTE: Groq retired llama-3.3-70b-versatile and llama-3.1-8b-instant on 2026-08-16.
+    llm_provider: str = "groq"
+    llm_model: str = "openai/gpt-oss-120b"
+    llm_fallback_model: str = "openai/gpt-oss-20b"  # tried if the main model errors/rate-limits
+    groq_api_key: str = ""        # set ONLY as an environment variable (never in code/chat)
+    llm_enabled: bool = True      # kill switch: LLM_ENABLED=false -> rule-based only
+    llm_timeout_s: float = 8.0    # per LLM call (serverless functions are short-lived)
 
     @property
     def cors_origin_list(self) -> list[str]:
