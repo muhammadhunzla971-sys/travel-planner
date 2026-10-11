@@ -117,19 +117,6 @@ async def test_works_without_a_curated_category(monkeypatch):
     assert [p.name for p in live] == ["Galata Tower"] and not live[0].curated
 
 
-async def test_still_returns_places_when_page_details_are_unavailable(monkeypatch):
-    async def fake(url, params=None, **kw):
-        if "titles" in (params or {}):
-            raise ProviderError("details down")
-        return WIKI_ISTANBUL(params)
-
-    monkeypatch.setattr("app.tools.places.fetch_json", fake)
-    names = {p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live}
-    # no description/popularity, so only titles that are recognisably sights (or curated) are kept
-    assert {"Hagia Sophia", "Topkapi Palace", "Blue Mosque", "Galata Tower", "Gulhane Park"} <= names
-    assert "Istanbul University" not in names and "Istanbul" not in names
-
-
 async def test_curated_category_alone_is_enough_when_geosearch_fails(monkeypatch):
     async def fake(url, params=None, **kw):
         if (params or {}).get("list") == "geosearch":
@@ -194,7 +181,7 @@ def test_categorize_and_generic():
 
 def test_sample_points_cover_a_wide_area():
     pts = _sample_points(ISTANBUL)
-    assert len(pts) == 13 and len(set(pts)) == 13
+    assert len(pts) == 9 and len(set(pts)) == 9
     assert pts[0] == (ISTANBUL.latitude, ISTANBUL.longitude)
 
 
@@ -203,7 +190,7 @@ async def test_geosearch_runs_at_many_points_and_dedupes(monkeypatch):
     patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL}, calls)
     places = await find_attractions(ISTANBUL)
     geo_calls = [p for _u, p in calls if (p or {}).get("list") == "geosearch"]
-    assert len(geo_calls) == 13 and len({p["gscoord"] for p in geo_calls}) == 13
+    assert len(geo_calls) == 9 and len({p["gscoord"] for p in geo_calls}) == 9
     names = [p.name for p in places]
     assert len(names) == len(set(names))  # same page found from several points counted once
 
@@ -267,7 +254,7 @@ async def test_diagnose_reports_why_places_are_kept_or_dropped(monkeypatch):
     from app.tools.places import diagnose
     patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL})
     rep = await diagnose(ISTANBUL, check=("Hagia Sophia", "Istanbul University", "Nowhere Tower"))
-    assert rep["geosearch"]["points"] == 13 and rep["geosearch"]["points_failed"] == 0
+    assert rep["geosearch"]["points"] == 9 and rep["geosearch"]["points_failed"] == 0
     assert rep["checks"]["Hagia Sophia"]["rejected_because"] is None
     assert rep["checks"]["Hagia Sophia"]["views_30d"] == 900_000
     assert rep["checks"]["Istanbul University"]["rejected_because"] == "title_filter"
@@ -287,3 +274,14 @@ async def test_diagnose_shows_failed_detail_batches(monkeypatch):
     rep = await diagnose(ISTANBUL)
     assert rep["details"]["batches_failed"] == rep["details"]["batches"] >= 1
     assert rep["details"]["with_views"] == 0
+
+
+async def test_all_detail_batches_failing_is_an_error_not_a_cached_result(monkeypatch):
+    async def fake(url, params=None, **kw):
+        if "titles" in (params or {}):
+            raise ProviderError("429")
+        return WIKI_ISTANBUL(params)
+
+    monkeypatch.setattr("app.tools.places.fetch_json", fake)
+    places = await find_attractions(ISTANBUL)
+    assert all(p.source == DataSource.estimated for p in places)  # honest generic fallback

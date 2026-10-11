@@ -1,7 +1,7 @@
 """Things to see near the destination.
 
 Live provider: Wikipedia (free, no key), in three small steps:
-  1. geosearch  - geotagged pages around a grid of ~13 sample points (up to 500 each), so famous
+  1. geosearch  - geotagged pages around a grid of ~9 sample points (up to 500 each), so famous
                   places a few km from the centre are not lost in the dense old town
   2. category   - "Category:Tourist attractions in <city>" (curated by editors; may not exist)
   3. details    - short description + page views (last 30 days) for up to 600 candidates,
@@ -26,9 +26,9 @@ from app.tools.http import ProviderError, fetch_json
 
 WIKI_URL = "https://en.wikipedia.org/w/api.php"
 PLACES_TTL = 24 * 3600
-GEO_RADIUS_M = 2_500       # per sample point
+GEO_RADIUS_M = 3_000       # per sample point
 GEO_LIMIT = 500            # per sample point
-RING_KM = (3.0, 6.0)       # sample rings around the centre
+RING_KM = (3.2,)           # sample ring around the centre
 CATEGORY_LIMIT = 200
 MAX_CANDIDATES = 600
 MIN_VIEWS = 500            # below this (30 days) a page is "obscure" - used only to fill gaps
@@ -118,11 +118,11 @@ def _title_ok(title: str, dest: GeoPoint) -> bool:
 
 
 def _sample_points(dest: GeoPoint) -> list[tuple[float, float]]:
-    """Centre + 8 points on a 3 km ring + 4 points on a 6 km ring (13 total)."""
+    """Centre + 8 points on a 3.2 km ring (9 total; few requests = fewer rate-limit problems)."""
     pts = [(dest.latitude, dest.longitude)]
     km_lat = 111.0
     km_lon = max(111.0 * math.cos(math.radians(dest.latitude)), 1.0)
-    for ring, n in zip(RING_KM, (8, 4), strict=True):
+    for ring, n in zip(RING_KM, (8,), strict=True):
         for k in range(n):
             ang = 2 * math.pi * k / n
             pts.append((round(dest.latitude + ring * math.cos(ang) / km_lat, 5),
@@ -138,7 +138,7 @@ def _rank_score(place: Place) -> float:
 
 # ---- Wikipedia calls --------------------------------------------------------
 _BASE = {"action": "query", "format": "json", "formatversion": 2}
-_MAX_PARALLEL = 4  # Wikipedia answers 429 if we fire ~25 requests at once
+_MAX_PARALLEL = 3  # Wikipedia answers 429 if we fire many requests at once
 _sem: asyncio.Semaphore | None = None
 
 
@@ -147,7 +147,7 @@ async def _wiki(params: dict[str, Any]) -> Any:
     if _sem is None:
         _sem = asyncio.Semaphore(_MAX_PARALLEL)
     async with _sem:
-        return await fetch_json(WIKI_URL, params)
+        return await fetch_json(WIKI_URL, params, retries=3, backoff=1.0)
 
 
 async def _geosearch_point(lat: float, lon: float) -> list[dict[str, Any]]:
@@ -228,7 +228,8 @@ def _reject_reason(title: str, page: dict[str, Any], dest: GeoPoint, has_coords:
 
 
 async def diagnose(dest: GeoPoint, check: tuple[str, ...] = ("Hagia Sophia", "Blue Mosque",
-                                                              "Topkapı Palace", "Galata Tower")) -> dict[str, Any]:
+                                                              "Sultan Ahmed Mosque", "Topkapı Palace",
+                                                              "Galata Tower")) -> dict[str, Any]:
     """Step-by-step report of what Wikipedia returned and why places were kept or dropped."""
     pts = _sample_points(dest)
     geo_res = await asyncio.gather(*[_geosearch_point(la, lo) for la, lo in pts], return_exceptions=True)
@@ -264,7 +265,10 @@ async def diagnose(dest: GeoPoint, check: tuple[str, ...] = ("Hagia Sophia", "Bl
             else "title_filter"
         if why:
             reasons[why] = reasons.get(why, 0) + 1
-    ranked = await _find(dest, 25)
+    try:
+        ranked = await _find(dest, 25)
+    except ProviderError:
+        ranked = []
     names_lower = {t.lower(): t for t in dict.fromkeys(ordered)}
     checks = {}
     for name in check:
@@ -346,6 +350,10 @@ async def _find(dest: GeoPoint, limit: int) -> list[Place]:
     ordered = [*cats, *(g["title"] for g in geo)]
     candidates = [t for t in dict.fromkeys(ordered) if _title_ok(t, dest)][:MAX_CANDIDATES]
     details = await _details(candidates)
+    if candidates and not details:
+        # Wikipedia throttled us: without descriptions/views the ranking is meaningless,
+        # so fail (not cached) and let the caller use clearly-labelled generic activities.
+        raise ProviderError("place details unavailable (rate limited?)")
     return _build_places(dest, geo, cats, details, limit)
 
 
