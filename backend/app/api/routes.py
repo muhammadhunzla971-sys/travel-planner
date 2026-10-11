@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from app.llm.client import check as llm_check
 from app.models.request import TripRequest
 from app.services.budget import CostLevel, allocate_budget
+from app.services.orchestrator import PlanResult, plan_trip
 from app.services.single_pass import SinglePassResult, run_single_pass
 from app.services.trip_data import (
     DataUnavailable,
@@ -56,6 +57,19 @@ async def agents_preview(request: TripRequest) -> SinglePassResult:
     The negotiation loop that fixes conflicts comes in Step 5."""
     try:
         return await run_single_pass(request)
+    except DestinationNotFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/plan", response_model=PlanResult)
+async def plan(request: TripRequest) -> PlanResult:
+    """The full planner: research, agents propose, critic reviews, agents negotiate until the
+    plan fits the budget (max 4 rounds). Returns the plan, the budget breakdown and the
+    negotiation timeline."""
+    try:
+        return await plan_trip(request)
     except DestinationNotFound as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DataUnavailable as exc:

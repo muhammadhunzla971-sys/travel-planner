@@ -25,6 +25,8 @@ def make_fetch(routes: dict[str, object], calls: list | None = None):
             if fragment in url:
                 if isinstance(response, Exception):
                     raise response
+                if callable(response):
+                    return response(params)
                 return response
         raise ProviderError(f"no fake route for {url}")
 
@@ -68,26 +70,61 @@ FORECAST = {"daily": {
     "precipitation_sum": [0.0, 3.2], "weather_code": [1, 61]}}
 
 
-def wiki_pages(*items):
-    pages = []
-    for title, extract, lat, lon in items:
-        page = {"title": title, "extract": extract}
-        if lat is not None:
-            page["coordinates"] = [{"lat": lat, "lon": lon}]
-        pages.append(page)
-    return {"query": {"pages": pages}}
+def wiki_page(title, desc="", views=None, lat=None, lon=None):
+    """One page as returned by the Wikipedia 'details' query."""
+    page = {"title": title}
+    if desc:
+        page["description"] = desc
+    if views is not None:
+        page["pageviews"] = {"2026-09-01": views}
+    if lat is not None:
+        page["coordinates"] = [{"lat": lat, "lon": lon}]
+    return page
 
 
-LONG = "A famous landmark that many visitors come to see every year."
-WIKI_ISTANBUL = wiki_pages(
-    ("Hagia Sophia Museum", LONG, 41.0086, 28.9802),
-    ("Topkapi Palace", LONG, 41.0115, 28.9834),
-    ("Galata Tower", LONG, 41.0256, 28.9744),
-    ("Blue Mosque", LONG, 41.0054, 28.9768),
-    ("Gulhane Park", LONG, 41.0131, 28.9814),
-    ("Istanbul University", LONG, 41.0128, 28.9636),   # skipped: not an attraction
-    ("Some Short Page", "tiny", 41.01, 28.98),          # skipped: extract too short
-    ("No Coordinates Place", LONG, None, None),         # skipped: no coords
-)
+def wiki_response(geo=(), cats=(), pages=()):
+    """Fake Wikipedia API. Answers the three kinds of request by their params:
+    list=geosearch, list=categorymembers and the batched title details."""
+    by_title = {p["title"]: p for p in pages}
+    geo_rows = [{"pageid": i, "ns": 0, "title": t, "lat": lat, "lon": lon, "dist": 100.0 * i}
+                for i, (t, lat, lon) in enumerate(geo, 1)]
+    cat_rows = [{"pageid": i, "ns": 0, "title": t} for i, t in enumerate(cats, 1)]
+
+    def respond(params):
+        p = params or {}
+        if p.get("list") == "geosearch":
+            return {"query": {"geosearch": geo_rows}}
+        if p.get("list") == "categorymembers":
+            return {"query": {"categorymembers": cat_rows}}
+        titles = (p.get("titles") or "").split("|")
+        return {"query": {"pages": [by_title[t] for t in titles if t in by_title]}}
+
+    return respond
+
+
+WIKI_GEO = [
+    ("Hagia Sophia", 41.0086, 28.9802), ("Topkapi Palace", 41.0115, 28.9834),
+    ("Galata Tower", 41.0256, 28.9744), ("Blue Mosque", 41.0054, 28.9768),
+    ("Gulhane Park", 41.0131, 28.9814), ("Obscure Chapel", 41.0140, 28.9500),
+    ("Istanbul University", 41.0128, 28.9636),  # skipped: not an attraction (title)
+    ("Aksaray, Fatih", 41.0100, 28.9528),       # skipped: a neighbourhood (description)
+    ("Istanbul", 41.0100, 28.9500),             # skipped: the city itself
+]
+WIKI_PAGES = [
+    wiki_page("Hagia Sophia", "Mosque and former church in Istanbul", 900_000, 41.0086, 28.9802),
+    wiki_page("Topkapi Palace", "Museum and former palace in Istanbul", 500_000, 41.0115, 28.9834),
+    wiki_page("Galata Tower", "Medieval tower in Istanbul", 400_000, 41.0256, 28.9744),
+    wiki_page("Blue Mosque", "Mosque in Istanbul, Turkey", 600_000, 41.0054, 28.9768),
+    wiki_page("Gulhane Park", "Historic urban park in Istanbul", 50_000, 41.0131, 28.9814),
+    wiki_page("Obscure Chapel", "Small chapel in Istanbul", 20, 41.0140, 28.9500),
+    wiki_page("Istanbul University", "Public university in Istanbul", 80_000, 41.0128, 28.9636),
+    wiki_page("Aksaray, Fatih", "Neighbourhood in Fatih, Istanbul", 3_000, 41.0100, 28.9528),
+    wiki_page("Istanbul", "Largest city in Turkey", 9_000_000, 41.0100, 28.9500),
+    # only in the curated category list, NOT in the geosearch results:
+    wiki_page("Basilica Cistern", "Underground cistern in Istanbul", 300_000, 41.0084, 28.9778),
+]
+WIKI_ISTANBUL = wiki_response(geo=WIKI_GEO, cats=["Hagia Sophia", "Basilica Cistern"], pages=WIKI_PAGES)
+LIVE_PLACE_NAMES = {"Hagia Sophia", "Topkapi Palace", "Galata Tower", "Blue Mosque", "Gulhane Park",
+                    "Obscure Chapel", "Basilica Cistern"}
 
 FUTURE_START = date(2030, 1, 10)

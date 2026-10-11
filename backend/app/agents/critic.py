@@ -47,7 +47,8 @@ class CriticAgent(BaseAgent):
     name = AgentName.critic
 
     # ---- deterministic checks -------------------------------------------
-    def check(self, state: TripState, ctx: AgentContext) -> Review:
+    def check(self, state: TripState, ctx: AgentContext,
+              waived: frozenset[str] | set[str] = frozenset()) -> Review:
         req = state.request
         cur = req.currency
         conflicts: list[Conflict] = []
@@ -155,13 +156,21 @@ class CriticAgent(BaseAgent):
         if any(x.source.value != "live" for x in (flight, stay) if x is not None):
             warnings.append("Flight and hotel prices are estimates, not live fares. Check them before booking.")
 
+        # Conflicts the orchestrator has knowingly accepted (e.g. a night flight because a
+        # daytime one does not fit the budget) are shown as warnings instead.
+        accepted = [c for c in conflicts if c.kind in waived]
+        if accepted:
+            conflicts = [c for c in conflicts if c.kind not in waived]
+            suggestions = [x for x in suggestions if not (x.constraints.avoid_late_arrival and "late_arrival" in waived)]
+            warnings = [f"Accepted trade-off: {c.description}" for c in accepted] + warnings
         approved = not any(c.kind in BLOCKING for c in conflicts)
         return Review(approved=approved, conflicts=conflicts, suggestions=suggestions, warnings=warnings,
                       total_cost=total, budget=req.budget)
 
     # ---- check + readable verdict ---------------------------------------
-    async def review(self, state: TripState, ctx: AgentContext) -> Review:
-        result = self.check(state, ctx)
+    async def review(self, state: TripState, ctx: AgentContext,
+                     waived: frozenset[str] | set[str] = frozenset()) -> Review:
+        result = self.check(state, ctx, waived)
         facts = {
             "currency": state.request.currency, "budget": state.request.budget,
             "total_cost": result.total_cost, "approved": result.approved,

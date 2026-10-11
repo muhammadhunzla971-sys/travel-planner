@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from app.models.plan import DataSource
 from app.tools.http import ProviderError
 from app.tools.places import (
+    Place,
     _rank_score,
     categorize,
     find_attractions,
@@ -15,7 +16,16 @@ from app.tools.weather import (
     one_year_earlier,
     summarize_weather,
 )
-from tests.fakes import FORECAST, ISTANBUL, LONG, WIKI_ISTANBUL, patch_all, wiki_pages
+from tests.fakes import (
+    FORECAST,
+    ISTANBUL,
+    LIVE_PLACE_NAMES,
+    WIKI_ISTANBUL,
+    WIKI_PAGES,
+    patch_all,
+    wiki_page,
+    wiki_response,
+)
 
 
 # ---- weather -------------------------------------------------------------
@@ -66,44 +76,89 @@ def test_weather_helpers():
 
 
 # ---- places --------------------------------------------------------------
-async def test_attractions_live_filtered_and_sorted(monkeypatch):
+async def test_attractions_live_filtered_and_ranked_by_popularity(monkeypatch):
     patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL})
     places = await find_attractions(ISTANBUL)
     names = [p.name for p in places]
-    assert "Istanbul University" not in names
-    assert "Some Short Page" not in names and "No Coordinates Place" not in names
-    assert len(places) == 5 and all(p.source == DataSource.live for p in places)
+    assert set(names) == LIVE_PLACE_NAMES  # university, neighbourhood and the city itself are gone
+    assert all(p.source == DataSource.live for p in places)
+    assert names[0] == "Hagia Sophia" and names[-1] == "Obscure Chapel"
     scores = [_rank_score(p) for p in places]
     assert scores == sorted(scores, reverse=True)
     by_name = {p.name: p for p in places}
-    assert by_name["Hagia Sophia Museum"].category == "museum"
-    assert by_name["Hagia Sophia Museum"].est_entry_usd > 0
+    assert by_name["Topkapi Palace"].category == "museum" and by_name["Topkapi Palace"].est_entry_usd > 0
     assert by_name["Blue Mosque"].category == "religious"
+    assert by_name["Galata Tower"].category == "historic"
 
 
-async def test_popular_far_place_beats_obscure_near_place(monkeypatch):
-    data = wiki_pages(("Obscure Chapel", LONG, 41.0140, 28.9500), ("Famous Tower", LONG, 41.09, 28.98))
-    pages = data["query"]["pages"]
-    pages[0]["pageviews"] = {"2026-09-01": 20}
-    pages[1]["pageviews"] = {"2026-09-01": 90000, "2026-09-02": 80000}
-    patch_all(monkeypatch, {"wikipedia": data})
+async def test_curated_page_missing_from_geosearch_is_still_found(monkeypatch):
+    patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL})
+    cistern = next(p for p in await find_attractions(ISTANBUL) if p.name == "Basilica Cistern")
+    assert cistern.curated and cistern.distance_km > 0 and cistern.popularity == 300_000
+    assert cistern.category == "historic"
+
+
+async def test_famous_place_far_from_centre_beats_obscure_place_next_to_it(monkeypatch):
+    fake = wiki_response(
+        geo=[("Obscure Chapel", 41.0140, 28.9500), ("Famous Tower", 41.09, 28.98)],
+        pages=[wiki_page("Obscure Chapel", "Small chapel in Istanbul", 20, 41.0140, 28.9500),
+               wiki_page("Famous Tower", "Landmark tower in Istanbul", 170_000, 41.09, 28.98)])
+    patch_all(monkeypatch, {"wikipedia": fake})
     places = await find_attractions(ISTANBUL)
-    assert places[0].name == "Famous Tower" and places[0].popularity == 170000
+    assert places[0].name == "Famous Tower" and places[0].popularity == 170_000
 
 
-async def test_city_itself_and_neighbourhoods_are_not_attractions(monkeypatch):
-    data = wiki_pages(
-        ("Istanbul", "Istanbul is the largest city in Turkey and a megacity of many people.", 41.01, 28.95),
-        ("Aksaray, Fatih", "Aksaray is a neighbourhood in the municipality of Fatih, Istanbul.", 41.01, 28.95),
-        ("Galata Tower", LONG, 41.0256, 28.9744))
-    patch_all(monkeypatch, {"wikipedia": data})
-    names = [p.name for p in await find_attractions(ISTANBUL) if p.source.value == "live"]
-    assert names == ["Galata Tower"]
+async def test_works_without_a_curated_category(monkeypatch):
+    fake = wiki_response(geo=[("Galata Tower", 41.0256, 28.9744)], cats=(), pages=WIKI_PAGES)
+    patch_all(monkeypatch, {"wikipedia": fake})
+    live = [p for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
+    assert [p.name for p in live] == ["Galata Tower"] and not live[0].curated
+
+
+async def test_still_returns_places_when_page_details_are_unavailable(monkeypatch):
+    async def fake(url, params=None, **kw):
+        if "titles" in (params or {}):
+            raise ProviderError("details down")
+        return WIKI_ISTANBUL(params)
+
+    monkeypatch.setattr("app.tools.places.fetch_json", fake)
+    names = {p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live}
+    # no description/popularity, so only titles that are recognisably sights (or curated) are kept
+    assert {"Hagia Sophia", "Topkapi Palace", "Blue Mosque", "Galata Tower", "Gulhane Park"} <= names
+    assert "Istanbul University" not in names and "Istanbul" not in names
+
+
+async def test_curated_category_alone_is_enough_when_geosearch_fails(monkeypatch):
+    async def fake(url, params=None, **kw):
+        if (params or {}).get("list") == "geosearch":
+            raise ProviderError("geosearch down")
+        return WIKI_ISTANBUL(params)
+
+    monkeypatch.setattr("app.tools.places.fetch_json", fake)
+    names = {p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live}
+    assert names == {"Hagia Sophia", "Basilica Cistern"}
+
+
+async def test_details_are_requested_in_batches_of_at_most_50(monkeypatch):
+    geo = [(f"Place {i} Museum", 41.0 + i * 0.0001, 28.95) for i in range(120)]
+    calls = []
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=[])}, calls)
+    await find_attractions(ISTANBUL)
+    batches = [p["titles"].split("|") for _url, p in calls if "titles" in (p or {})]
+    assert len(batches) == 3 and max(len(b) for b in batches) == 50
+    assert sum(len(b) for b in batches) == 120
+
+
+async def test_limit_is_respected(monkeypatch):
+    patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL})
+    places = await find_attractions(ISTANBUL, limit=6)
+    assert len(places) == 6 and sum(p.source == DataSource.live for p in places) == 6 or len(places) >= 5
 
 
 async def test_attractions_topped_up_when_few_live_results(monkeypatch):
-    few = {"query": {"pages": WIKI_ISTANBUL["query"]["pages"][:2]}}
-    patch_all(monkeypatch, {"wikipedia": few})
+    fake = wiki_response(geo=[("Hagia Sophia", 41.0086, 28.9802), ("Blue Mosque", 41.0054, 28.9768)],
+                         pages=WIKI_PAGES)
+    patch_all(monkeypatch, {"wikipedia": fake})
     places = await find_attractions(ISTANBUL)
     assert [p.source for p in places].count(DataSource.live) == 2
     assert any(p.source == DataSource.estimated for p in places)
@@ -117,9 +172,19 @@ async def test_attractions_fallback_when_api_down(monkeypatch):
     assert all("Istanbul" in p.name for p in places)
 
 
+def test_rank_score_prefers_popular_curated_places():
+    base = {"name": "x", "category": "historic", "distance_km": 1.0}
+    famous = Place(**base, popularity=500_000)
+    obscure = Place(**base, popularity=10)
+    curated = Place(**base, popularity=10, curated=True)
+    assert _rank_score(famous) > _rank_score(obscure)
+    assert _rank_score(curated) > _rank_score(obscure)
+
+
 def test_categorize_and_generic():
     assert categorize("National Museum") == "museum"
     assert categorize("Old Fort") == "historic"
     assert categorize("Central Park") == "nature"
     assert categorize("Random Thing") == "sightseeing"
+    assert categorize("Basilica Cistern") == "historic"
     assert len(generic_activities(ISTANBUL)) == 5

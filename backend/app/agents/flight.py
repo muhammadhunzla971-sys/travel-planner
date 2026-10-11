@@ -30,6 +30,32 @@ def _score(f: FlightOption, pool: list[FlightOption]) -> float:
             + (0.25 if is_late_arrival(f) else 0.0))
 
 
+def candidate_pool(ctx: AgentContext, c: Constraints) -> tuple[list[FlightOption], list[str], int | None]:
+    """Flights that satisfy the preferences/constraints (relaxed if nothing would be left)."""
+    notes: list[str] = []
+    pool = list(ctx.data.flights)
+    max_stops = c.max_stops if c.max_stops is not None else ctx.request.preferences.max_stops
+    if max_stops is not None:
+        fewer = [f for f in pool if f.stops <= max_stops]
+        if fewer:
+            pool = fewer
+        else:
+            notes.append(f"no flight has {max_stops} stops or fewer")
+    if c.avoid_late_arrival:
+        daytime = [f for f in pool if not is_late_arrival(f)]
+        if daytime:
+            pool = daytime
+        else:
+            notes.append("every option arrives late at night")
+    return pool, notes, max_stops
+
+
+def flight_floor(ctx: AgentContext, c: Constraints) -> float:
+    """Cheapest price the flight agent could possibly propose under these constraints."""
+    pool, _notes, _stops = candidate_pool(ctx, c)
+    return min((f.total_price for f in pool), default=0.0)
+
+
 def _describe(f: FlightOption) -> str:
     stops = "direct" if f.stops == 0 else f"{f.stops} stop{'s' if f.stops > 1 else ''}"
     dur = f", {f.duration_minutes // 60}h{f.duration_minutes % 60:02d}m" if f.duration_minutes else ""
@@ -49,21 +75,7 @@ class FlightAgent(BaseAgent):
                             within_cap=True, considered=0,
                             reason="No origin was given or no flights were found, so flights are excluded.")
 
-        notes: list[str] = []
-        pool = flights
-        max_stops = c.max_stops if c.max_stops is not None else ctx.request.preferences.max_stops
-        if max_stops is not None:
-            fewer = [f for f in pool if f.stops <= max_stops]
-            if fewer:
-                pool = fewer
-            else:
-                notes.append(f"no flight has {max_stops} stops or fewer")
-        if c.avoid_late_arrival:
-            daytime = [f for f in pool if not is_late_arrival(f)]
-            if daytime:
-                pool = daytime
-            else:
-                notes.append("every option arrives late at night")
+        pool, notes, max_stops = candidate_pool(ctx, c)
 
         limit = min(cap, c.max_price) if c.max_price is not None else cap
         affordable = [f for f in pool if f.total_price <= limit]

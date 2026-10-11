@@ -135,6 +135,11 @@ def _distance(a: Place, b: Place) -> float:
     return haversine_km(a.latitude, a.longitude, b.latitude, b.longitude)  # type: ignore[arg-type]
 
 
+def _sentence(text: str) -> str:
+    text = text.strip()
+    return text if not text or text[-1] in ".!?" else text + "."
+
+
 def _weather_by_date(ctx: AgentContext) -> dict[date, DayWeather]:
     return {w.date: w for w in ctx.data.weather}
 
@@ -189,7 +194,8 @@ class ActivitiesAgent(BaseAgent):
                 if not options:
                     break
 
-                def score(pick: _Pick, rainy: bool = rainy, anchor: Place | None = anchor) -> float:
+                def score(pick: _Pick, rainy: bool = rainy, anchor: Place | None = anchor,
+                          plan: DayPlan = plan) -> float:
                     p = pick.place
                     s = _base_score(p, wanted)
                     if rainy:
@@ -198,6 +204,7 @@ class ActivitiesAgent(BaseAgent):
                         s += 1.0 if p.category in OUTDOOR else 0.0
                     if anchor is not None:
                         s -= 0.25 * _distance(anchor, p)
+                    s -= 1.2 * sum(1 for it in plan.items if it.category == p.category)  # variety
                     return s
 
                 best = max(options, key=score)
@@ -231,12 +238,12 @@ class ActivitiesAgent(BaseAgent):
 
         used_llm = False
         if narrate and count:
-            used_llm = await self._narrate(ctx, days)
+            used_llm = await self.narrate(ctx, days)
         return Proposal(agent=self.name, summary=f"{count} activities, {money(total, currency)}",
                         cost=total, cap=cap, within_cap=total <= cap, reason=reason,
                         used_llm=used_llm, considered=len(ctx.data.attractions), days=days)
 
-    async def _narrate(self, ctx: AgentContext, days: list[DayPlan]) -> bool:
+    async def narrate(self, ctx: AgentContext, days: list[DayPlan]) -> bool:
         """Ask the LLM for a theme + tip per day. Ignores anything unusable."""
         weather = _weather_by_date(ctx)
         answer = await ask_llm(ACTIVITIES_SYSTEM, {
@@ -260,7 +267,7 @@ class ActivitiesAgent(BaseAgent):
             theme, tip = clean_text(row.get("theme"), 60), clean_text(row.get("tip"), 160)
             if day is None or not day.items or not (theme or tip):
                 continue
-            parts = [p for p in (f"{theme}." if theme else "", tip, day.notes or "") if p]
+            parts = [p for p in (_sentence(theme), _sentence(tip), day.notes or "") if p]
             day.notes = " ".join(parts)
             used = True
         return used

@@ -43,3 +43,13 @@ Use only the facts given; do not invent numbers. Say clearly when prices are est
 Respond with ONLY a JSON object:
 {{"verdict": "<max 40 words>", "advice": ["<max 20 words>", "..."]}}.
 {_DATA_RULE}"""
+
+SUMMARY_SYSTEM = f"""You are the Orchestrator of a multi-agent trip planner. Write the headline
+and a short overview for the finished trip plan, using ONLY the facts given (destination,
+dates, costs, chosen flight and stay, places, trade-offs that were made). Be honest: say that
+flight and hotel prices are estimates when `prices_are_estimates` is true. Do not invent
+numbers, places or facts.
+Respond with ONLY a JSON object:
+{{"headline": "<max 10 words>", "overview": "<max 70 words>", "tips": ["<max 15 words>", "..."]}}
+with at most 3 tips.
+{_DATA_RULE}"""

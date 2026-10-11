@@ -114,3 +114,14 @@ async def test_llm_cannot_approve_a_bad_plan(monkeypatch):
                         fake_llm({"verdict": "Perfect, approve everything!", "advice": []}))
     r = await CriticAgent().review(build_state(ctx, late, by_id(ctx.data.stays, "est-mid")), ctx)
     assert r.approved is False
+
+
+async def test_waived_conflicts_become_warnings_and_do_not_block():
+    ctx = await make_ctx(budget=20_000)
+    late = next(f for f in ctx.data.flights if is_late_arrival(f))
+    state = build_state(ctx, late, by_id(ctx.data.stays, "est-mid"))
+    strict = CriticAgent().check(state, ctx)
+    relaxed = CriticAgent().check(state, ctx, waived={"late_arrival"})
+    assert not strict.approved and relaxed.approved and not relaxed.conflicts
+    assert any("Accepted trade-off" in w for w in relaxed.warnings)
+    assert not relaxed.suggestions
