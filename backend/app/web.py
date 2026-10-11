@@ -139,7 +139,8 @@ function money(v, cur) {
 function fmtDT(iso) {
   if (!iso) return "";
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/);
-  return m ? `${m[3]}/${m[2]} ${m[4]}` : iso;
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return m ? `${Number(m[3])} ${mon[Number(m[2]) - 1]} ${m[4]}` : iso;
 }
 function hhmm(t) { return String(t || "").slice(0, 5); }
 function dur(min) { return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m`; }
@@ -194,6 +195,34 @@ function downloadICS(data) {
   a.href = URL.createObjectURL(blob);
   a.download = "trip-" + data.trip.request.destination.replace(/\W+/g, "-").toLowerCase() + ".ics";
   document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ---- share link: the trip itself is packed (gzip + base64url) into the URL after "#t=" ----
+const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64url = (str) => Uint8Array.from(atob(str.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+async function pipeBytes(bytes, stream) {
+  const out = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+  return new Uint8Array(await out.arrayBuffer());
+}
+async function shareLink(data) {
+  const btn = $("share");
+  try {
+    const slim = {...data, timeline: [], trip: {...data.trip, messages: [], flight_options: [], stay_options: []}};
+    const packed = await pipeBytes(new TextEncoder().encode(JSON.stringify(slim)), new CompressionStream("gzip"));
+    const url = location.origin + "/#t=" + b64url(packed);
+    try { await navigator.clipboard.writeText(url); btn.textContent = "Link copied!"; }
+    catch { window.prompt("Copy this link:", url); }
+  } catch { btn.textContent = "Sharing not supported in this browser"; }
+  setTimeout(() => { btn.textContent = "Copy share link"; }, 2500);
+}
+async function openSharedTrip() {
+  if (!location.hash.startsWith("#t=")) return;
+  try {
+    const bytes = await pipeBytes(unb64url(location.hash.slice(3)), new DecompressionStream("gzip"));
+    const data = JSON.parse(new TextDecoder().decode(bytes));
+    render(data);
+    $("result").scrollIntoView({behavior: "smooth"});
+  } catch { showError("This share link could not be opened (it may be cut off)."); }
 }
 
 // ---- recent trips, kept in this browser only ----
@@ -271,10 +300,11 @@ function render(data) {
     <div class="verdict">${esc(data.review.verdict || "")}</div>${warns}</div>
   <div class="card"><h2>Day by day</h2>${days}</div>
   <div class="card"><h2>Data sources</h2><div class="note">Live = fetched from a real provider now. Estimated = typical prices, check before booking.</div>${srcPills}
-    <div class="row-actions"><button type="button" id="ics">Add to calendar (.ics)</button><button type="button" id="print">Print / save as PDF</button><button type="button" id="again">Plan another trip</button></div></div>`;
+    <div class="row-actions"><button type="button" id="share">Copy share link</button><button type="button" id="ics">Add to calendar (.ics)</button><button type="button" id="print">Print / save as PDF</button><button type="button" id="again">Plan another trip</button></div></div>`;
   $("result").classList.remove("hidden");
   $("print").onclick = () => window.print();
   $("ics").onclick = () => downloadICS(data);
+  $("share").onclick = () => shareLink(data);
   lastData = data;
   $("again").onclick = () => { $("result").classList.add("hidden"); $("live").classList.add("hidden"); window.scrollTo({top: 0, behavior: "smooth"}); };
 }
@@ -335,6 +365,7 @@ $("form").addEventListener("submit", async (e) => {
     $("go").disabled = false; $("go").textContent = "Plan my trip";
   }
 });
+openSharedTrip();
 </script>
 </body>
 </html>

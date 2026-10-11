@@ -308,3 +308,16 @@ async def test_details_follow_continuation_so_coordinates_are_not_lost(monkeypat
     live = [p for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
     assert [p.name for p in live] == ["Galata Tower"]
     assert live[0].popularity == 5000 and live[0].latitude == 41.0256
+
+
+async def test_history_pages_and_government_terms_are_not_sights(monkeypatch):
+    geo = [("Hagia Sophia", 41.0086, 28.9802), ("Sack of Constantinople", 41.0, 28.9),
+           ("Sublime Porte", 41.0, 28.9), ("Byzantium", 41.0, 28.9), ("Golden Horn", 41.0, 28.9)]
+    pages = [wiki_page("Hagia Sophia", "Mosque in Istanbul", 900_000, 41.0086, 28.9802),
+             wiki_page("Sack of Constantinople", "Event", 90_000, 41.0, 28.9),
+             wiki_page("Sublime Porte", "Government of the Ottoman Empire", 90_000, 41.0, 28.9),
+             wiki_page("Byzantium", "Ancient Greek colony, predecessor of Istanbul", 90_000, 41.0, 28.9),
+             wiki_page("Golden Horn", "Inlet of the Bosphorus in Istanbul", 90_000, 41.0, 28.9)]
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
+    live = [p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
+    assert live == ["Hagia Sophia"]

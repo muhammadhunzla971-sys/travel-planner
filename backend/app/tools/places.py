@@ -44,7 +44,8 @@ _SKIP_WORDS = ("school", "college", "university", "hospital", "airport", "statio
 _EVENT_WORDS = ("earthquake", "massacre", "bombing", "bombings", "fire", "riot", "riots", "attack",
                 "coup", "protest", "protests", "revolt", "uprising", "assassination", "shooting",
                 "flood", "plague", "pogrom", "incident", "crisis", "election", "census", "strike",
-                "history of", "list of", "timeline", "conquest", "occupation")
+                "history of", "list of", "timeline", "conquest", "occupation", "sack", "sacking",
+                "sublime porte")
 _SKIP_RE = re.compile(r"\b(?:" + "|".join((*_SKIP_WORDS, *_EVENT_WORDS)) + r")\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"\b\d{3,4}\b")  # "1999 Izmit earthquake", "1766 ..." - events, not sights
 
@@ -55,7 +56,9 @@ _NOT_A_SIGHT = ("neighbourhood", "neighborhood", "district", "municipality", "su
                 "album", "film", "television", "newspaper", "football club", "sports club",
                 "company", "university", "school", "hospital", "railway", "metro station",
                 "born ", "battle", "siege", "earthquake", "massacre", "terrorist", "bombing",
-                "attack", "riot", "protest", "uprising", "historical period", "treaty")
+                "attack", "riot", "protest", "uprising", "historical period", "treaty", "sacking",
+                "sack of", "predecessor", "colony", "government", "inlet", "estuary",
+                "historical region", "former name")
 
 _CATEGORY_WORDS = [
     ("museum", ("museum", "gallery", "exhibition")),
@@ -68,7 +71,7 @@ _CATEGORY_WORDS = [
 ]
 # popularity dominates (3 points per factor of 10 in page views); the category only nudges
 _CATEGORY_BONUS = {"museum": 0.8, "historic": 0.8, "landmark": 0.6, "nature": 0.6,
-                   "religious": 0.4, "sightseeing": 0.0}
+                   "religious": 0.4, "sightseeing": -1.0}  # unrecognised type: needs more views to win
 CURATED_BONUS = 2.5  # listed in "Tourist attractions in <city>"
 
 # rough entry fee in USD per person, by category (ESTIMATE)

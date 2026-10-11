@@ -1,34 +1,65 @@
 # AI Travel Planner (Multi-Agent)
 
-Customer gives budget, destination and dates. An orchestrator coordinates flight, stay and
-activities agents and returns a complete trip plan. Runs fully online (no local heavy services).
+A customer enters a **budget, destination and dates**. A team of agents plans the whole trip together and
+shows the negotiation live:
 
-## Progress
-- [x] Step 1: skeleton + health endpoint, deployed on Vercel
-- [x] Step 2: data models, TripState, message protocol, budget allocator
-- [x] Step 3: provider adapters (flights, hotels, places, currency, weather) + cache + mock fallback
-- [x] Step 4: agents (flight, stay, activities, critic) + Groq LLM client with fallbacks
-- [x] Step 5: orchestrator + negotiation loop (`POST /api/plan`)
-- [x] Step 6: live progress streaming (SSE) + website at `/`
-- [x] Step 7: calendar export (.ics), print to PDF, recent trips (in your browser), CI
+- **Flight agent**, **Stay agent**, **Activities agent** each propose within their share of the budget
+- **Critic** checks the plan with deterministic code (budget, night arrivals, overlaps) - the LLM can never approve a bad plan
+- **Orchestrator** runs research, collects proposals, and lets the agents negotiate (max 4 rounds) until the plan fits
 
-## Endpoints (so far)
-- `GET /health`
-- `GET /version`
-- `GET /docs` (Swagger UI)
-- `POST /api/budget/preview` (validate a trip request and see the budget split)
-- `POST /api/tools/preview` (live data: geocode, FX, weather, attractions + estimated flights/stays)
-- `GET /api/llm/check` (is the Groq key set and working? never shows the key)
-- `POST /api/agents/preview` (one pass of all agents + critic, no negotiation)
-- `POST /api/plan` (the full planner: agents propose, critic reviews, they negotiate up to 4 rounds until the plan fits the budget; returns plan, budget breakdown and the negotiation timeline)
+Live site: the root URL of the Vercel deployment (`/`). Free to run, no credit card, nothing runs on your PC.
+
+## How it works
+```
+Browser (/)  --POST /api/plan/stream-->  FastAPI on Vercel
+                                           |
+                    Orchestrator --research--> Open-Meteo (geocode, weather), FX rates, Wikipedia (attractions)
+                        |  proposals
+        Flight agent / Stay agent / Activities agent  <--LLM (Groq gpt-oss) picks among validated options
+                        |
+                      Critic (rules)  --objection--> Orchestrator --constraint--> agents re-propose
+                        |
+              final plan + budget breakdown + timeline  --SSE-->  Browser
+```
+- Flights and hotels have no free keyless price API, so they are **estimates and always labelled** `estimated`.
+- Destination, FX rate, attractions and (near-term) weather are **live**. Every number shows its source.
+- If the LLM or any provider fails, rule-based fallbacks keep the planner working.
+
+## Features
+- Live agent conversation (Server-Sent Events), budget bars, day-by-day plan
+- Add to calendar (.ics), print / save as PDF, **shareable link** (the trip is packed into the URL), recent trips (stored in your browser)
+- 184 automated tests, GitHub Actions CI (`ruff` + `pytest`)
+
+## Endpoints
+- `GET /` website, `GET /docs` Swagger, `GET /health`, `GET /version`
+- `POST /api/plan` full planner, `POST /api/plan/stream` same with live progress (SSE)
+- `POST /api/budget/preview`, `POST /api/tools/preview`, `POST /api/agents/preview` (step-by-step debugging)
+- `GET /api/places/debug?city=Istanbul` shows what Wikipedia returned and why places were kept or dropped
+- `GET /api/llm/check` is the Groq key working? (never shows the key)
 
 ## Environment variables
-`GROQ_API_KEY` (secret, set only in Vercel). Optional: `LLM_MODEL`, `LLM_FALLBACK_MODEL`, `LLM_ENABLED`, `LLM_TIMEOUT_S`.
-Without a key the agents still work using rule-based logic.
+`GROQ_API_KEY` (secret, set only in Vercel). Optional: `LLM_MODEL` (default `openai/gpt-oss-120b`),
+`LLM_FALLBACK_MODEL` (`openai/gpt-oss-20b`), `LLM_ENABLED`, `LLM_TIMEOUT_S`. Without a key the agents use rules only.
 
-## Run the tests (optional, needs Python)
+## Run the tests (optional)
 ```
 cd backend
 pip install -r requirements-dev.txt
-pytest
+ruff check . && pytest -q
 ```
+
+## Demo script (2 minutes)
+1. Open the site, keep Istanbul / 2500 USD, press **Plan my trip**.
+2. Point at the live feed: the Critic objects to a 04:13 arrival, the Orchestrator tells the Flight agent, a daytime flight is chosen.
+3. Show the budget bars (planned share vs actual) and the **estimated / live** labels.
+4. Try a tiny budget (e.g. 300 USD) to show the "infeasible budget" handling.
+5. Press **Copy share link**, open it in a new tab, then export the **.ics** to a calendar.
+
+## Known limits
+- Flight and hotel prices are estimates (no free live fare API). Check before booking.
+- Restaurants are not planned yet; food + transport is a budget estimate.
+- Serverless memory cache is best-effort; Vercel Hobby has a function time limit (planning normally takes 5-20 s).
+
+## Ideas for later
+Real flight/hotel API (Amadeus/Duffel free tiers need sign-up), user accounts + saved trips in a free database
+(Neon/Supabase), restaurant suggestions, map view.
