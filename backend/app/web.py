@@ -320,9 +320,44 @@ async function drawMap(data) {
   setTimeout(() => theMap && theMap.invalidateSize(), 200);
 }
 
-// ---- accounts + saved trips (Supabase; only active when the site owner has configured it) ----
+// ---- accounts + saved trips (Supabase REST API; active only when the site owner has configured it) ----
+// No client library needed: a few fetch() calls. Works with both publishable and legacy anon keys.
 let sb = null, user = null;
-const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js";
+const SB = {url: "", key: "", session: null};
+const SESSION_KEY = "travel-planner-session";
+
+function sbStore(sess) {
+  SB.session = sess;
+  try { sess ? localStorage.setItem(SESSION_KEY, JSON.stringify(sess)) : localStorage.removeItem(SESSION_KEY); } catch {}
+}
+function sbSessionFrom(j) {
+  return {access_token: j.access_token, refresh_token: j.refresh_token, user: j.user,
+          expires_at: Math.floor(Date.now() / 1000) + (j.expires_in || 3600)};
+}
+async function sbRefresh() {
+  if (!SB.session || !SB.session.refresh_token) return false;
+  try {
+    const r = await fetch(SB.url + "/auth/v1/token?grant_type=refresh_token", {method: "POST",
+      headers: {apikey: SB.key, "Content-Type": "application/json"}, body: JSON.stringify({refresh_token: SB.session.refresh_token})});
+    if (!r.ok) { sbStore(null); setUser(null); return false; }
+    sbStore(sbSessionFrom(await r.json())); return true;
+  } catch { return false; }
+}
+async function sbFetch(path, opts = {}) {
+  const go = () => fetch(SB.url + path, {...opts, headers: {apikey: SB.key, "Content-Type": "application/json",
+    ...(SB.session ? {Authorization: "Bearer " + SB.session.access_token} : {}), ...(opts.headers || {})}});
+  let res = await go();
+  if (res.status === 401 && await sbRefresh()) res = await go();
+  return res;
+}
+async function sbAuth(kind, email, password) {
+  const path = kind === "signin" ? "/auth/v1/token?grant_type=password" : "/auth/v1/signup";
+  const r = await fetch(SB.url + path, {method: "POST", headers: {apikey: SB.key, "Content-Type": "application/json"},
+    body: JSON.stringify({email, password})});
+  let j = {}; try { j = await r.json(); } catch {}
+  if (!r.ok) return {error: j.error_description || j.msg || j.message || ("Request failed (" + r.status + ")")};
+  return {session: j.access_token ? sbSessionFrom(j) : null};
+}
 
 function setUser(u) {
   user = u;
@@ -330,8 +365,10 @@ function setUser(u) {
   bar.innerHTML = u
     ? `<span>${esc(u.email)}</span><button type="button" id="signout">Sign out</button>`
     : `<button type="button" id="showauth">Sign in / Sign up</button>`;
-  if (u) { $("signout").onclick = async () => { await sb.auth.signOut(); }; $("auth").classList.add("hidden"); loadSaved(); }
-  else { $("showauth").onclick = () => $("auth").classList.toggle("hidden"); $("saved").classList.add("hidden"); }
+  if (u) {
+    $("signout").onclick = async () => { try { await sbFetch("/auth/v1/logout", {method: "POST"}); } catch {} sbStore(null); setUser(null); };
+    $("auth").classList.add("hidden"); loadSaved();
+  } else { $("showauth").onclick = () => $("auth").classList.toggle("hidden"); $("saved").classList.add("hidden"); }
 }
 function authMsg(t) { $("authmsg").textContent = t; }
 
@@ -339,23 +376,22 @@ async function initAccounts() {
   try {
     const cfg = await (await fetch("/api/config")).json();
     if (!cfg.supabase_url || !cfg.supabase_anon_key) return;
-    await loadScript(SUPABASE_JS);
-    sb = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
-    const {data} = await sb.auth.getSession();
-    setUser(data.session ? data.session.user : null);
-    sb.auth.onAuthStateChange((_e, session) => setUser(session ? session.user : null));
+    SB.url = cfg.supabase_url.replace(/\/+$/, ""); SB.key = cfg.supabase_anon_key; sb = true;
+    try { SB.session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { SB.session = null; }
+    if (SB.session && SB.session.expires_at < Date.now() / 1000 + 60) await sbRefresh();
+    setUser(SB.session ? SB.session.user : null);
     if (lastData) $("save").classList.remove("hidden");
-    $("signin").onclick = async () => {
-      authMsg("Signing in...");
-      const {error} = await sb.auth.signInWithPassword({email: $("email").value.trim(), password: $("password").value});
-      authMsg(error ? error.message : "");
+    const attempt = async (kind) => {
+      const email = $("email").value.trim(), password = $("password").value;
+      if (!email || password.length < 6) { authMsg("Enter your email and a password of at least 6 characters."); return; }
+      authMsg(kind === "signin" ? "Signing in..." : "Creating account...");
+      const out = await sbAuth(kind, email, password);
+      if (out.error) { authMsg(out.error); return; }
+      if (out.session) { authMsg(""); sbStore(out.session); setUser(out.session.user); }
+      else authMsg("Account created. Check your email to confirm it, then sign in.");
     };
-    $("signup").onclick = async () => {
-      authMsg("Creating account...");
-      const {data: d, error} = await sb.auth.signUp({email: $("email").value.trim(), password: $("password").value});
-      if (error) authMsg(error.message);
-      else authMsg(d.session ? "" : "Account created. Check your email to confirm it, then sign in.");
-    };
+    $("signin").onclick = () => attempt("signin");
+    $("signup").onclick = () => attempt("signup");
   } catch (e) { console.warn("accounts unavailable", e); }
 }
 
@@ -366,28 +402,36 @@ async function saveTrip(data) {
   if (!user) { $("auth").classList.remove("hidden"); $("auth").scrollIntoView({behavior: "smooth"}); authMsg("Sign in first, then press Save trip again."); return; }
   const r = data.trip.request, btn = $("save");
   btn.disabled = true; btn.textContent = "Saving...";
-  const {error} = await sb.from("trips").insert({
-    destination: r.destination, start_date: r.start_date, end_date: r.end_date,
-    total_cost: data.breakdown.total_cost, currency: r.currency, data: slimForSave(data)});
-  btn.textContent = error ? "Could not save" : "Saved!";
-  if (error) console.warn(error); else loadSaved();
+  let ok = false;
+  try {
+    const res = await sbFetch("/rest/v1/trips", {method: "POST", headers: {Prefer: "return=minimal"}, body: JSON.stringify({
+      destination: r.destination, start_date: r.start_date, end_date: r.end_date,
+      total_cost: data.breakdown.total_cost, currency: r.currency, data: slimForSave(data)})});
+    ok = res.ok; if (!ok) console.warn("save failed", res.status, await res.text());
+  } catch (e) { console.warn(e); }
+  btn.textContent = ok ? "Saved!" : "Could not save";
+  if (ok) loadSaved();
   setTimeout(() => { btn.disabled = false; btn.textContent = "Save trip"; }, 2500);
 }
 async function loadSaved() {
   if (!sb || !user) return;
-  const {data, error} = await sb.from("trips").select("id,created_at,destination,start_date,end_date,total_cost,currency")
-    .order("created_at", {ascending: false}).limit(30);
-  if (error) { console.warn(error); return; }
-  $("saved").classList.toggle("hidden", !data.length);
-  $("saved-list").innerHTML = data.map((t) => `<div class="kv"><span>${esc(t.destination)} &middot; ${esc(t.start_date)} to ${esc(t.end_date)} &middot; ${money(t.total_cost, t.currency)}</span>
+  let rows = [];
+  try {
+    const res = await sbFetch("/rest/v1/trips?select=id,created_at,destination,start_date,end_date,total_cost,currency&order=created_at.desc&limit=30");
+    if (!res.ok) { console.warn("load failed", res.status); return; }
+    rows = await res.json();
+  } catch (e) { console.warn(e); return; }
+  $("saved").classList.toggle("hidden", !rows.length);
+  $("saved-list").innerHTML = rows.map((t) => `<div class="kv"><span>${esc(t.destination)} &middot; ${esc(t.start_date)} to ${esc(t.end_date)} &middot; ${money(t.total_cost, t.currency)}</span>
     <span><button type="button" class="open-s" data-id="${esc(t.id)}">Open</button> <button type="button" class="del-s" data-id="${esc(t.id)}">Delete</button></span></div>`).join("");
   document.querySelectorAll(".open-s").forEach((b) => b.onclick = async () => {
-    const {data: row, error: e2} = await sb.from("trips").select("data").eq("id", b.dataset.id).single();
-    if (!e2 && row) { render(row.data); $("result").scrollIntoView({behavior: "smooth"}); }
+    const res = await sbFetch("/rest/v1/trips?select=data&id=eq." + encodeURIComponent(b.dataset.id),
+      {headers: {Accept: "application/vnd.pgrst.object+json"}});
+    if (res.ok) { const row = await res.json(); render(row.data); $("result").scrollIntoView({behavior: "smooth"}); }
   });
   document.querySelectorAll(".del-s").forEach((b) => b.onclick = async () => {
     if (!confirm("Delete this saved trip?")) return;
-    await sb.from("trips").delete().eq("id", b.dataset.id); loadSaved();
+    await sbFetch("/rest/v1/trips?id=eq." + encodeURIComponent(b.dataset.id), {method: "DELETE"}); loadSaved();
   });
 }
 
