@@ -285,3 +285,26 @@ async def test_all_detail_batches_failing_is_an_error_not_a_cached_result(monkey
     monkeypatch.setattr("app.tools.places.fetch_json", fake)
     places = await find_attractions(ISTANBUL)
     assert all(p.source == DataSource.estimated for p in places)  # honest generic fallback
+
+
+async def test_details_follow_continuation_so_coordinates_are_not_lost(monkeypatch):
+    calls = []
+
+    async def fake(url, params=None, **kw):
+        p = params or {}
+        calls.append(p)
+        if p.get("list") == "geosearch":
+            return {"query": {"geosearch": []}}
+        if p.get("list") == "categorymembers":
+            return {"query": {"categorymembers": [{"title": "Galata Tower"}]}}
+        if "cocontinue" not in p:  # part 1: description + views, no coordinates yet
+            return {"continue": {"cocontinue": "x", "continue": "||"},
+                    "query": {"pages": [{"title": "Galata Tower", "description": "Tower in Istanbul",
+                                         "pageviews": {"2026-09-01": 5000}}]}}
+        return {"query": {"pages": [{"title": "Galata Tower",
+                                     "coordinates": [{"lat": 41.0256, "lon": 28.9744}]}]}}
+
+    monkeypatch.setattr("app.tools.places.fetch_json", fake)
+    live = [p for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
+    assert [p.name for p in live] == ["Galata Tower"]
+    assert live[0].popularity == 5000 and live[0].latitude == 41.0256

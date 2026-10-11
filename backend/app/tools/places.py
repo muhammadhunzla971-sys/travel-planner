@@ -183,14 +183,27 @@ async def _category_titles(dest: GeoPoint) -> list[str]:
 
 
 async def _details_batch(titles: list[str]) -> dict[str, dict[str, Any]]:
-    data = await _wiki({
+    """Details for up to 50 titles. MediaWiki may answer in several parts ("continue"),
+    e.g. coordinates arrive in a later part, so follow the continuation a few times."""
+    params: dict[str, Any] = {
         **_BASE, "titles": "|".join(titles), "redirects": 1,
         "prop": "pageviews|description|coordinates", "pvipdays": 30, "pvilimit": "max",
-        "colimit": "max"})
+        "colimit": "max"}
     out: dict[str, dict[str, Any]] = {}
-    for page in ((data or {}).get("query") or {}).get("pages") or []:
-        if isinstance(page, dict) and page.get("title") and not page.get("missing"):
-            out[page["title"]] = page
+    for _ in range(4):
+        data = await _wiki(params)
+        for page in ((data or {}).get("query") or {}).get("pages") or []:
+            if isinstance(page, dict) and page.get("title") and not page.get("missing"):
+                merged = out.setdefault(page["title"], {"title": page["title"]})
+                for key, value in page.items():
+                    if key == "coordinates" and isinstance(merged.get(key), list):
+                        merged[key] = [*merged[key], *value]
+                    else:
+                        merged.setdefault(key, value)
+        cont = (data or {}).get("continue") if isinstance(data, dict) else None
+        if not isinstance(cont, dict) or not cont:
+            break
+        params = {**params, **cont}
     return out
 
 
