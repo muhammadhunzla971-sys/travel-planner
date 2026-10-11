@@ -1,9 +1,11 @@
 """FastAPI entrypoint. Step 1: skeleton + health endpoints."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from app.api.routes import router as api_router
 from app.config import get_settings
+from app.web import PAGE_HTML
 
 settings = get_settings()
 
@@ -25,8 +27,13 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api")
 
 
-@app.get("/")
-async def root() -> dict:
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def home() -> HTMLResponse:
+    return HTMLResponse(PAGE_HTML)
+
+
+@app.get("/api-info")
+async def api_info() -> dict:
     return {"message": f"{settings.app_name} is running", "docs": "/docs"}
 
 

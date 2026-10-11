@@ -1,10 +1,14 @@
 """API routes."""
+import asyncio
+import json
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.llm.client import check as llm_check
 from app.models.request import TripRequest
 from app.services.budget import CostLevel, allocate_budget
-from app.services.orchestrator import PlanResult, plan_trip
+from app.services.orchestrator import PlanResult, TimelineEvent, plan_trip
 from app.services.single_pass import SinglePassResult, run_single_pass
 from app.services.trip_data import (
     DataUnavailable,
@@ -86,3 +90,51 @@ async def plan(request: TripRequest) -> PlanResult:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DataUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _sse(event: str, payload: object) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/plan/stream")
+async def plan_stream(request: TripRequest) -> StreamingResponse:
+    """Same as /plan, but streams progress as Server-Sent Events:
+    `step` (one per agent message), then `result` (the full PlanResult) or `error`."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_event(event: TimelineEvent) -> None:
+        await queue.put(("step", event.model_dump(mode="json")))
+
+    async def run() -> None:
+        try:
+            result = await plan_trip(request, on_event=on_event)
+            await queue.put(("result", result.model_dump(mode="json")))
+        except DestinationNotFound as exc:
+            await queue.put(("error", {"status": 422, "detail": str(exc)}))
+        except DataUnavailable as exc:
+            await queue.put(("error", {"status": 503, "detail": str(exc)}))
+        except Exception:  # noqa: BLE001 - never leave the browser hanging
+            await queue.put(("error", {"status": 500, "detail": "Planning failed unexpectedly."}))
+        finally:
+            await queue.put(("end", None))
+
+    async def stream():
+        task = asyncio.create_task(run())
+        try:
+            yield _sse("start", {"destination": request.destination})
+            while True:
+                try:
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=10)
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                if kind == "end":
+                    break
+                yield _sse(kind, payload)
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-transform",
+                                      "X-Accel-Buffering": "no"})
