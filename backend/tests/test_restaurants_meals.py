@@ -43,7 +43,7 @@ async def test_find_restaurants_live_and_cached(monkeypatch):
     patch_all(monkeypatch, {"overpass": OVERPASS}, calls)
     first = await find_restaurants(ISTANBUL)
     second = await find_restaurants(ISTANBUL)
-    assert len(first) == 3 and first == second and len(calls) == 1
+    assert len(first) == 3 and first == second and len(calls) == 2  # two mirrors asked once, 2nd call cached
     assert "around:" in calls[0][1]["data"] and "restaurant" in calls[0][1]["data"]
 
 
@@ -121,7 +121,7 @@ async def test_find_restaurants_sends_diet_filter(monkeypatch):
     calls: list = []
     patch_all(monkeypatch, {"overpass": OVERPASS}, calls)
     await find_restaurants(ISTANBUL, ["halal"])
-    assert "diet:halal" in calls[0][1]["data"]
+    assert all("diet:halal" in c[1]["data"] for c in calls)
 
 
 async def test_orchestrator_warns_when_no_meal_matches_diet():
@@ -135,3 +135,19 @@ async def test_orchestrator_warns_when_no_meal_matches_diet():
                             for i in range(8)]
     result = await Orchestrator().plan(ctx.request, ctx.data)
     assert any("dietary needs" in w and "Please check" in w for w in result.trip.warnings)
+
+
+async def test_restaurants_fall_back_to_mirror_and_to_plain_query(monkeypatch):
+    from app.tools.http import ProviderError
+    calls: list = []
+
+    async def fake(url, params=None, **kw):
+        calls.append((url, params["data"]))
+        if "kumi" not in url or "diet:halal" in params["data"]:
+            raise ProviderError("busy")
+        return OVERPASS
+
+    monkeypatch.setattr("app.tools.restaurants.fetch_json", fake)
+    rs = await find_restaurants(ISTANBUL, ["halal"])
+    assert {r.name for r in rs} >= {"Plain Diner"}
+    assert any("diet:halal" in q for _, q in calls) and any("diet:" not in q for _, q in calls)

@@ -5,6 +5,7 @@ so places are ranked by how well-documented they are (cuisine, website, Wikipedi
 and dietary tags (diet:halal, diet:vegetarian, ...) are used when the traveller has dietary needs.
 If Overpass is down the list is simply empty and the plan has no meal suggestions.
 """
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -12,9 +13,10 @@ from pydantic import BaseModel, Field
 from app.models.plan import DataSource
 from app.tools.cache import cache, make_key
 from app.tools.geo import GeoPoint, haversine_km
-from app.tools.http import fetch_json
+from app.tools.http import ProviderError, fetch_json
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_MIRRORS = (OVERPASS_URL, "https://overpass.kumi.systems/api/interpreter")
 RESTAURANT_TTL = 24 * 3600
 RADIUS_M = 4_000
 MAX_RESULTS = 120
@@ -101,12 +103,33 @@ def build_query(dest: GeoPoint, diets: list[str] | None = None) -> str:
     for key in diets or []:
         tag = _DIET_TAGS[key][0]
         parts.append(f'nwr["amenity"="restaurant"]["name"]["{tag}"~"^(yes|only)$"]{around};')
-    return f"[out:json][timeout:15];({''.join(parts)});out center 600;"
+    return f"[out:json][timeout:10];({''.join(parts)});out center 400;"
+
+
+async def _race(query: str) -> Any:
+    """Ask every Overpass mirror at once and use the first good answer (one server is often busy)."""
+    tasks = [asyncio.ensure_future(fetch_json(url, {"data": query}, timeout=9.0, retries=0))
+             for url in OVERPASS_MIRRORS]
+    last: Exception | None = None
+    try:
+        for done in asyncio.as_completed(tasks):
+            try:
+                return await done
+            except ProviderError as exc:
+                last = exc
+    finally:
+        for t in tasks:
+            t.cancel()
+    raise last or ProviderError("no Overpass server answered")
 
 
 async def _find(dest: GeoPoint, diets: list[str] | None = None) -> list[Restaurant]:
-    query = build_query(dest, diets)
-    data = await fetch_json(OVERPASS_URL, {"data": query}, timeout=14.0, retries=1, backoff=1.0)
+    try:
+        data = await _race(build_query(dest, diets))
+    except ProviderError:
+        if not diets:
+            raise
+        data = await _race(build_query(dest))  # the lighter query still gives a usable list
     return parse_overpass(dest, data)
 
 
