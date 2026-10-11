@@ -261,3 +261,29 @@ async def test_obscure_pages_backfill_when_too_few_good_places(monkeypatch):
     patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
     live = [p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
     assert live[0] == "Great Museum" and len(live) == 3 and MIN_GOOD_PLACES >= 3
+
+
+async def test_diagnose_reports_why_places_are_kept_or_dropped(monkeypatch):
+    from app.tools.places import diagnose
+    patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL})
+    rep = await diagnose(ISTANBUL, check=("Hagia Sophia", "Istanbul University", "Nowhere Tower"))
+    assert rep["geosearch"]["points"] == 13 and rep["geosearch"]["points_failed"] == 0
+    assert rep["checks"]["Hagia Sophia"]["rejected_because"] is None
+    assert rep["checks"]["Hagia Sophia"]["views_30d"] == 900_000
+    assert rep["checks"]["Istanbul University"]["rejected_because"] == "title_filter"
+    assert rep["checks"]["Nowhere Tower"]["rejected_because"] == "not_returned_by_wikipedia"
+    assert rep["top"][0]["name"] == "Hagia Sophia"
+
+
+async def test_diagnose_shows_failed_detail_batches(monkeypatch):
+    from app.tools.places import diagnose
+
+    async def fake(url, params=None, **kw):
+        if "titles" in (params or {}):
+            raise ProviderError("429")
+        return WIKI_ISTANBUL(params)
+
+    monkeypatch.setattr("app.tools.places.fetch_json", fake)
+    rep = await diagnose(ISTANBUL)
+    assert rep["details"]["batches_failed"] == rep["details"]["batches"] >= 1
+    assert rep["details"]["with_views"] == 0

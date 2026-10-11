@@ -45,6 +45,18 @@ async def tools_preview(request: TripRequest) -> TripData:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/places/debug")
+async def places_debug(city: str = "Istanbul") -> dict:
+    """Shows what Wikipedia returned for a city and why places were kept or dropped."""
+    from app.tools.geo import geocode
+    from app.tools.places import diagnose
+
+    dest = await geocode(city)
+    if dest is None:
+        raise HTTPException(status_code=422, detail=f"Unknown city: {city}")
+    return await diagnose(dest)
+
+
 @router.get("/llm/check")
 async def llm_health() -> dict:
     """Is the Groq key configured and working? (Never returns the key.)"""

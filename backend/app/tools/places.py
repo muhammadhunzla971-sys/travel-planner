@@ -138,10 +138,20 @@ def _rank_score(place: Place) -> float:
 
 # ---- Wikipedia calls --------------------------------------------------------
 _BASE = {"action": "query", "format": "json", "formatversion": 2}
+_MAX_PARALLEL = 4  # Wikipedia answers 429 if we fire ~25 requests at once
+_sem: asyncio.Semaphore | None = None
+
+
+async def _wiki(params: dict[str, Any]) -> Any:
+    global _sem
+    if _sem is None:
+        _sem = asyncio.Semaphore(_MAX_PARALLEL)
+    async with _sem:
+        return await fetch_json(WIKI_URL, params)
 
 
 async def _geosearch_point(lat: float, lon: float) -> list[dict[str, Any]]:
-    data = await fetch_json(WIKI_URL, {
+    data = await _wiki({
         **_BASE, "list": "geosearch", "gscoord": f"{lat}|{lon}",
         "gsradius": GEO_RADIUS_M, "gslimit": GEO_LIMIT, "gsnamespace": 0})
     rows = ((data or {}).get("query") or {}).get("geosearch") or []
@@ -165,7 +175,7 @@ async def _geosearch(dest: GeoPoint) -> list[dict[str, Any]]:
 
 
 async def _category_titles(dest: GeoPoint) -> list[str]:
-    data = await fetch_json(WIKI_URL, {
+    data = await _wiki({
         **_BASE, "list": "categorymembers", "cmtitle": f"Category:Tourist attractions in {dest.name}",
         "cmnamespace": 0, "cmlimit": CATEGORY_LIMIT})
     rows = ((data or {}).get("query") or {}).get("categorymembers") or []
@@ -173,7 +183,7 @@ async def _category_titles(dest: GeoPoint) -> list[str]:
 
 
 async def _details_batch(titles: list[str]) -> dict[str, dict[str, Any]]:
-    data = await fetch_json(WIKI_URL, {
+    data = await _wiki({
         **_BASE, "titles": "|".join(titles), "redirects": 1,
         "prop": "pageviews|description|coordinates", "pvipdays": 30, "pvilimit": "max",
         "colimit": "max"})
@@ -200,6 +210,86 @@ async def _details(titles: list[str]) -> dict[str, dict[str, Any]]:
         if isinstance(r, dict):  # a failed batch just means no popularity data for those titles
             merged.update(r)
     return merged
+
+
+def _reject_reason(title: str, page: dict[str, Any], dest: GeoPoint, has_coords: bool,
+                   is_curated: bool) -> str | None:
+    if not _title_ok(title, dest):
+        return "title_filter"
+    desc = (page.get("description") or "").strip()
+    if desc and any(w in desc.lower() for w in _NOT_A_SIGHT):
+        return "description_filter"
+    if not has_coords:
+        return "no_coordinates"
+    category = categorize(f"{title} {desc}") if desc else categorize(title)
+    if not desc and category == "sightseeing" and not is_curated:
+        return "no_description_and_unrecognised_title"
+    return None
+
+
+async def diagnose(dest: GeoPoint, check: tuple[str, ...] = ("Hagia Sophia", "Blue Mosque",
+                                                              "Topkapı Palace", "Galata Tower")) -> dict[str, Any]:
+    """Step-by-step report of what Wikipedia returned and why places were kept or dropped."""
+    pts = _sample_points(dest)
+    geo_res = await asyncio.gather(*[_geosearch_point(la, lo) for la, lo in pts], return_exceptions=True)
+    geo: dict[str, dict[str, Any]] = {}
+    geo_errors: list[str] = []
+    for r in geo_res:
+        if isinstance(r, list):
+            for row in r:
+                geo.setdefault(row["title"], row)
+        else:
+            geo_errors.append(str(r)[:120])
+    try:
+        cats = await _category_titles(dest)
+        cat_error = None
+    except Exception as exc:  # noqa: BLE001 - diagnostics only
+        cats, cat_error = [], str(exc)[:120]
+    ordered = [*cats, *geo]
+    candidates = [t for t in dict.fromkeys(ordered) if _title_ok(t, dest)][:MAX_CANDIDATES]
+    batches = [candidates[i:i + BATCH] for i in range(0, len(candidates), BATCH)]
+    det_res = await asyncio.gather(*[_details_batch(b) for b in batches], return_exceptions=True)
+    details: dict[str, dict[str, Any]] = {}
+    det_errors: list[str] = []
+    for r in det_res:
+        if isinstance(r, dict):
+            details.update(r)
+        else:
+            det_errors.append(str(r)[:120])
+    reasons: dict[str, int] = {}
+    for t in dict.fromkeys(ordered):
+        page = details.get(t, {})
+        has_coords = t in geo or bool(page.get("coordinates"))
+        why = _reject_reason(t, page, dest, has_coords, t in set(cats)) if t in candidates \
+            else "title_filter"
+        if why:
+            reasons[why] = reasons.get(why, 0) + 1
+    ranked = await _find(dest, 25)
+    names_lower = {t.lower(): t for t in dict.fromkeys(ordered)}
+    checks = {}
+    for name in check:
+        real = names_lower.get(name.lower())
+        page = details.get(real, {}) if real else {}
+        checks[name] = {
+            "found_in_geosearch_or_category": bool(real), "in_candidates": bool(real in candidates),
+            "details_fetched": bool(page), "views_30d": _views(page) if page else None,
+            "description": page.get("description"),
+            "rejected_because": (_reject_reason(real, page, dest, real in geo or bool(page.get("coordinates")),
+                                                real in set(cats)) if real else "not_returned_by_wikipedia")}
+    return {
+        "centre": [dest.latitude, dest.longitude],
+        "geosearch": {"points": len(pts), "points_failed": len(geo_errors), "errors": geo_errors[:3],
+                      "unique_titles": len(geo)},
+        "category": {"titles": len(cats), "error": cat_error},
+        "candidates": len(candidates),
+        "details": {"batches": len(batches), "batches_failed": len(det_errors), "errors": det_errors[:3],
+                    "pages_returned": len(details),
+                    "with_views": sum(1 for p in details.values() if _views(p))},
+        "rejected_by_reason": reasons,
+        "checks": checks,
+        "top": [{"name": p.name, "views": p.popularity, "km": p.distance_km, "curated": p.curated,
+                 "category": p.category} for p in ranked],
+    }
 
 
 # ---- turning raw pages into ranked places -----------------------------------
