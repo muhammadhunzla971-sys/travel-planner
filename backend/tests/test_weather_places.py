@@ -321,3 +321,16 @@ async def test_history_pages_and_government_terms_are_not_sights(monkeypatch):
     patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
     live = [p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
     assert live == ["Hagia Sophia"]
+
+
+async def test_byzantium_is_dropped_whatever_wikipedia_calls_it(monkeypatch):
+    geo = [("Hagia Sophia", 41.0086, 28.9802), ("Byzantium", 41.0, 28.9), ("Lost City", 41.0, 28.9),
+           ("Hippodrome of Constantinople", 41.0054, 28.9753)]
+    pages = [wiki_page("Hagia Sophia", "Mosque in Istanbul", 900_000, 41.0086, 28.9802),
+             wiki_page("Byzantium", "", 90_000, 41.0, 28.9),                       # no description at all
+             wiki_page("Lost City", "Ancient Greek city on the Bosphorus", 90_000, 41.0, 28.9),
+             wiki_page("Hippodrome of Constantinople", "Ancient Roman chariot racing stadium",
+                       80_000, 41.0054, 28.9753)]                                    # a real sight: kept
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
+    live = {p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live}
+    assert live == {"Hagia Sophia", "Hippodrome of Constantinople"}

@@ -60,6 +60,25 @@ _NOT_A_SIGHT = ("neighbourhood", "neighborhood", "district", "municipality", "su
                 "sack of", "predecessor", "colony", "government", "inlet", "estuary",
                 "historical region", "former name")
 
+# pages about a PAST city / state / period (e.g. "Byzantium"), not something a visitor can walk into
+_HISTORY_DESC_RE = re.compile(
+    r"\b(?:ancient|medieval|historical|former|byzantine|ottoman|roman|greek)\b.*"
+    r"\b(?:city|colony|settlement|state|empire|kingdom|polis|region|period|era|capital|name)\b",
+    re.IGNORECASE)
+_HISTORY_TITLES = {"byzantium", "constantinople", "new rome", "stamboul", "istanbul (disambiguation)"}
+
+
+def _is_history_page(title: str, desc: str, category: str) -> bool:
+    """True for pages about a past city/state. Real sights (a palace, a hippodrome) keep their
+    specific category, so only the vague 'sightseeing' kind is checked against the description."""
+    if title.strip().lower() in _HISTORY_TITLES:
+        return True
+    return category == "sightseeing" and bool(desc) and bool(_HISTORY_DESC_RE.search(desc))
+
+
+_NOT_A_SIGHT_RE = re.compile(r"\b(?:" + "|".join(re.escape(w.strip()) for w in _NOT_A_SIGHT) + r")",
+                             re.IGNORECASE)  # word start only: "riot" must not match "chariot"
+
 _CATEGORY_WORDS = [
     ("museum", ("museum", "gallery", "exhibition")),
     ("historic", ("palace", "castle", "fort", "tower", "citadel", "ruins", "tomb", "aqueduct",
@@ -233,11 +252,13 @@ def _reject_reason(title: str, page: dict[str, Any], dest: GeoPoint, has_coords:
     if not _title_ok(title, dest):
         return "title_filter"
     desc = (page.get("description") or "").strip()
-    if desc and any(w in desc.lower() for w in _NOT_A_SIGHT):
+    if desc and _NOT_A_SIGHT_RE.search(desc):
         return "description_filter"
     if not has_coords:
         return "no_coordinates"
     category = categorize(f"{title} {desc}") if desc else categorize(title)
+    if _is_history_page(title, desc, category):
+        return "history_page"
     if not desc and category == "sightseeing" and not is_curated:
         return "no_description_and_unrecognised_title"
     return None
@@ -326,7 +347,7 @@ def _build_places(dest: GeoPoint, geo: list[dict[str, Any]], cats: list[str],
             continue
         page = details.get(title, {})
         desc = (page.get("description") or "").strip()
-        if desc and any(w in desc.lower() for w in _NOT_A_SIGHT):
+        if desc and _NOT_A_SIGHT_RE.search(desc):
             continue
         lat = lon = None
         if title in geo_by_title:
@@ -338,6 +359,8 @@ def _build_places(dest: GeoPoint, geo: list[dict[str, Any]], cats: list[str],
             continue
         category = categorize(f"{title} {desc}") if desc else categorize(title)
         is_curated = title in curated
+        if _is_history_page(title, desc, category):
+            continue  # a past city or state, not a sight
         if not desc and category == "sightseeing" and not is_curated:
             continue  # nothing tells us this is a sight
         places.append(Place(
