@@ -9,7 +9,8 @@ activities agents and returns a complete trip plan. Runs fully online (no local 
 - [x] Step 3: provider adapters (flights, hotels, places, currency, weather) + cache + mock fallback
 - [x] Step 4: agents (flight, stay, activities, critic) + Groq LLM client with fallbacks
 - [x] Step 5: orchestrator + negotiation loop (`POST /api/plan`)
-- [ ] Step 6: streaming progress (SSE) + frontend hookup
+- [x] Step 6: live progress streaming (SSE) + website at `/`
+- [x] Step 7: calendar export (.ics), print to PDF, recent trips (in your browser), CI
 
 ## Endpoints (so far)
 - `GET /health`
