@@ -21,7 +21,7 @@ from app.tools.geo import GeoPoint, geocode
 from app.tools.hotels import search_stays
 from app.tools.http import ProviderError
 from app.tools.places import Place, find_attractions
-from app.tools.restaurants import Restaurant, find_restaurants
+from app.tools.restaurants import Restaurant, diet_keys, find_restaurants
 from app.tools.weather import DayWeather, get_weather, summarize_weather
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ async def gather_trip_data(request: TripRequest) -> TripData:
         _safe(get_weather(dest.latitude, dest.longitude, request.start_date, request.end_date),
               [], "Weather", warnings),
         _safe(find_attractions(dest), [], "Attractions", warnings),
-        _safe(find_restaurants(dest), [], "Restaurants", warnings),
+        _safe(find_restaurants(dest, diet_keys(request.preferences.dietary_needs)), [], "Restaurants", warnings),
         _safe(search_flights(request, origin, dest, fx), [], "Flights", warnings),
         _safe(search_stays(request, dest, fx), [], "Stays", warnings),
     )

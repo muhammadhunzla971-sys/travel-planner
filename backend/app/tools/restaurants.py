@@ -93,20 +93,31 @@ def parse_overpass(dest: GeoPoint, data: Any) -> list[Restaurant]:
     return out[:MAX_RESULTS]
 
 
-async def _find(dest: GeoPoint) -> list[Restaurant]:
-    query = (f'[out:json][timeout:15];nwr["amenity"="restaurant"]["name"]'
-             f"(around:{RADIUS_M},{dest.latitude},{dest.longitude});out center 400;")
+def build_query(dest: GeoPoint, diets: list[str] | None = None) -> str:
+    """Everything named + restaurant nearby, PLUS (when the traveller has dietary needs) places that
+    carry the matching diet tag, so those are not lost when the area has hundreds of restaurants."""
+    around = f"(around:{RADIUS_M},{dest.latitude},{dest.longitude})"
+    parts = [f'nwr["amenity"="restaurant"]["name"]{around};']
+    for key in diets or []:
+        tag = _DIET_TAGS[key][0]
+        parts.append(f'nwr["amenity"="restaurant"]["name"]["{tag}"~"^(yes|only)$"]{around};')
+    return f"[out:json][timeout:15];({''.join(parts)});out center 600;"
+
+
+async def _find(dest: GeoPoint, diets: list[str] | None = None) -> list[Restaurant]:
+    query = build_query(dest, diets)
     data = await fetch_json(OVERPASS_URL, {"data": query}, timeout=14.0, retries=1, backoff=1.0)
     return parse_overpass(dest, data)
 
 
-async def find_restaurants(dest: GeoPoint) -> list[Restaurant]:
-    key = make_key("restaurants-v1", dest.name, round(dest.latitude, 2), round(dest.longitude, 2))
-    return await cache.get_or_set(key, RESTAURANT_TTL, lambda: _find(dest))
+async def find_restaurants(dest: GeoPoint, diets: list[str] | None = None) -> list[Restaurant]:
+    diets = sorted(set(diets or []))
+    key = make_key("restaurants-v2", dest.name, round(dest.latitude, 2), round(dest.longitude, 2), *diets)
+    return await cache.get_or_set(key, RESTAURANT_TTL, lambda: _find(dest, diets))
 
 
 def km_between(a: tuple[float, float], b: tuple[float, float]) -> float:
     return haversine_km(a[0], a[1], b[0], b[1])
 
 
-__all__ = ["Restaurant", "diet_keys", "find_restaurants", "km_between", "parse_overpass"]
+__all__ = ["Restaurant", "build_query", "diet_keys", "find_restaurants", "km_between", "parse_overpass"]

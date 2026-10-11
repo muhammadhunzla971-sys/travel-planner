@@ -107,3 +107,31 @@ async def test_orchestrator_adds_meals_coordinates_and_map_centre():
     assert meals and meals[0].name == "Halal Far" and meals[0].matches_diet is True
     dumped = result.model_dump(mode="json")
     assert dumped["trip"]["days"][0]["meals"] is not None and dumped["center"] == [ISTANBUL.latitude, ISTANBUL.longitude]
+
+
+def test_build_query_adds_diet_filters_only_when_asked():
+    from app.tools.restaurants import build_query
+    plain = build_query(ISTANBUL)
+    assert '"amenity"="restaurant"' in plain and "diet:" not in plain
+    halal = build_query(ISTANBUL, ["halal"])
+    assert halal.count("around:") == 2 and "diet:halal" in halal and "out center" in halal
+
+
+async def test_find_restaurants_sends_diet_filter(monkeypatch):
+    calls: list = []
+    patch_all(monkeypatch, {"overpass": OVERPASS}, calls)
+    await find_restaurants(ISTANBUL, ["halal"])
+    assert "diet:halal" in calls[0][1]["data"]
+
+
+async def test_orchestrator_warns_when_no_meal_matches_diet():
+    from app.models.request import TripPreferences
+    from app.services.orchestrator import Orchestrator
+    from tests.agent_helpers import make_ctx
+
+    ctx = await make_ctx(budget=20_000, start_date=date(2031, 4, 21), end_date=date(2031, 4, 26),
+                         preferences=TripPreferences(dietary_needs=["halal"]))
+    ctx.data.restaurants = [Restaurant(name=f"Plain {i}", latitude=41.01 + i / 1000, longitude=28.98)
+                            for i in range(8)]
+    result = await Orchestrator().plan(ctx.request, ctx.data)
+    assert any("dietary needs" in w and "Please check" in w for w in result.trip.warnings)

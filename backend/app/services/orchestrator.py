@@ -285,7 +285,12 @@ class Orchestrator:
             narrate_task, self.critic.review(state, ctx, waived), self._summarize(state, ctx, notes))
 
         centre = (data.destination.latitude, data.destination.longitude)
-        plan_meals(state.days, data.restaurants, centre, state.request.preferences.dietary_needs)
+        needs = state.request.preferences.dietary_needs
+        plan_meals(state.days, data.restaurants, centre, needs)
+        meals = [m for d in state.days for m in d.meals]
+        if needs and meals and not any(m.matches_diet for m in meals):
+            notes.append(f"None of the suggested restaurants is confirmed for your dietary needs ({', '.join(needs)}) "
+                         "in OpenStreetMap, which does not tag every place. Please check with the restaurant.")
 
         state.conflicts = final_review.conflicts
         extra = []

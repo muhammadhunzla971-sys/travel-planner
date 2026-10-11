@@ -456,7 +456,7 @@ function render(data) {
       <span>${esc(i.name)}<br><small>${esc(i.category)} &middot; ${i.duration_minutes} min${i.area ? " &middot; " + esc(i.area) : ""}</small></span>
       <span class="c">${i.cost > 0 ? money(i.cost, cur) : "Free"}</span></div>`).join("");
     const meals = (d.meals || []).map((m) => `<div class="item meal"><span class="t">${m.slot === "lunch" ? "Lunch" : "Dinner"}</span>
-      <span>${esc(m.name)}<br><small>${esc(m.cuisine || "restaurant")}${m.area ? " &middot; " + esc(m.area) : ""}${m.matches_diet === true ? " &middot; matches your diet" : m.matches_diet === false ? " &middot; diet not confirmed" : ""}</small></span>
+      <span>${esc(m.name)}<br><small>${esc(m.cuisine || "restaurant")}${m.area ? " &middot; " + esc(m.area) : ""}${m.matches_diet === true ? " &middot; matches your diet" : m.matches_diet === false ? " &middot; diet not confirmed (please ask)" : ""}</small></span>
       <span class="c">${/^https?:\/\//.test(m.website || "") ? `<a href="${esc(m.website)}" target="_blank" rel="noopener noreferrer">website</a>` : ""}</span></div>`).join("");
     return `<div class="day"><h3>Day ${d.day_number} &middot; ${esc(d.date)}</h3>
       ${d.notes ? `<div class="note">${esc(d.notes)}</div>` : ""}${items || ""}${meals}</div>`;
