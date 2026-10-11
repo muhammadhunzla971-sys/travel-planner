@@ -134,7 +134,8 @@ async def test_orchestrator_warns_when_no_meal_matches_diet():
     ctx.data.restaurants = [Restaurant(name=f"Plain {i}", latitude=41.01 + i / 1000, longitude=28.98)
                             for i in range(8)]
     result = await Orchestrator().plan(ctx.request, ctx.data)
-    assert any("dietary needs" in w and "Please check" in w for w in result.trip.warnings)
+    assert any("Halal is common" in w for w in result.trip.warnings)      # Istanbul (TR)
+    assert any("Halal is common" in w for w in result.review.warnings)  # the website shows these
 
 
 async def test_restaurants_fall_back_to_mirror_and_to_plain_query(monkeypatch):

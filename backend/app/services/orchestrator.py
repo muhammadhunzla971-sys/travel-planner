@@ -43,6 +43,9 @@ log = logging.getLogger(__name__)
 NEGOTIABLE = (AgentName.flight, AgentName.stay, AgentName.activities)
 
 
+HALAL_COMMON = {"TR", "PK", "AE", "SA", "EG", "MA", "ID", "MY", "QA", "KW", "OM", "JO", "BH", "BD", "TN", "DZ"}
+
+
 class TimelineEvent(BaseModel):
     seq: int
     round: int
@@ -289,8 +292,14 @@ class Orchestrator:
         plan_meals(state.days, data.restaurants, centre, needs)
         meals = [m for d in state.days for m in d.meals]
         if needs and meals and not any(m.matches_diet for m in meals):
-            notes.append(f"None of the suggested restaurants is confirmed for your dietary needs ({', '.join(needs)}) "
-                         "in OpenStreetMap, which does not tag every place. Please check with the restaurant.")
+            wanted = ", ".join(needs)
+            note = (f"None of the suggested restaurants is confirmed for your dietary needs ({wanted}) in "
+                    "OpenStreetMap, which does not tag every place. Please check with the restaurant.")
+            if "halal" in [n.lower() for n in needs] and data.destination.country_code in HALAL_COMMON:
+                note = (f"Halal is common in {data.destination.name}, but OpenStreetMap does not confirm it for "
+                        "these places. Look for a halal sign or ask the restaurant before you order.")
+            notes.append(note)
+            final_review.warnings.append(note)  # the website shows the critic's warnings
 
         state.conflicts = final_review.conflicts
         extra = []
