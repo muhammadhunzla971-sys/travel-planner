@@ -110,3 +110,8 @@ def test_home_page_has_map_accounts_and_meals():
     html = TestClient(app).get("/").text
     for needle in ("drawMap", "initAccounts", "saveTrip", "leaflet", "m.slot"):
         assert needle in html
+
+
+def test_home_page_has_dietary_field_sent_with_the_request():
+    html = TestClient(app).get("/").text
+    assert 'id="diet"' in html and "dietary_needs" in html

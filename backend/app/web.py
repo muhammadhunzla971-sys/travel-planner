@@ -109,6 +109,7 @@ button.go:disabled{opacity:.6;cursor:wait}
       <div><label for="pace">Pace</label>
         <select id="pace"><option value="relaxed">Relaxed</option><option value="balanced" selected>Balanced</option><option value="packed">Packed</option></select></div>
       <div><label for="interests">Interests (optional)</label><input id="interests" placeholder="history, food, nature"></div>
+      <div><label for="diet">Dietary needs (optional)</label><input id="diet" placeholder="halal, vegetarian"></div>
     </div>
     <button class="go" id="go" type="submit">Plan my trip</button>
     <div class="err hidden" id="err"></div>
@@ -533,7 +534,8 @@ $("form").addEventListener("submit", async (e) => {
     budget: Number($("budget").value), currency: $("currency").value.trim(), destination: $("destination").value.trim(),
     origin: $("origin").value.trim() || null, start_date: $("start").value, end_date: $("end").value,
     travelers: Number($("travelers").value) || 1,
-    preferences: {style: $("style").value, pace: $("pace").value, interests},
+    preferences: {style: $("style").value, pace: $("pace").value, interests,
+      dietary_needs: $("diet").value.split(",").map((x) => x.trim()).filter(Boolean)},
   };
   let got = false;
   try {
