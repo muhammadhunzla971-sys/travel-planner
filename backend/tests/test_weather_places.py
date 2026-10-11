@@ -3,8 +3,10 @@ from datetime import date, timedelta
 from app.models.plan import DataSource
 from app.tools.http import ProviderError
 from app.tools.places import (
+    MIN_GOOD_PLACES,
     Place,
     _rank_score,
+    _sample_points,
     categorize,
     find_attractions,
     generic_activities,
@@ -140,7 +142,7 @@ async def test_curated_category_alone_is_enough_when_geosearch_fails(monkeypatch
 
 
 async def test_details_are_requested_in_batches_of_at_most_50(monkeypatch):
-    geo = [(f"Place {i} Museum", 41.0 + i * 0.0001, 28.95) for i in range(120)]
+    geo = [(f"Place {chr(65 + i // 26)}{chr(65 + i % 26)} Museum", 41.0 + i * 0.0001, 28.95) for i in range(120)]
     calls = []
     patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=[])}, calls)
     await find_attractions(ISTANBUL)
@@ -188,3 +190,74 @@ def test_categorize_and_generic():
     assert categorize("Random Thing") == "sightseeing"
     assert categorize("Basilica Cistern") == "historic"
     assert len(generic_activities(ISTANBUL)) == 5
+
+
+def test_sample_points_cover_a_wide_area():
+    pts = _sample_points(ISTANBUL)
+    assert len(pts) == 13 and len(set(pts)) == 13
+    assert pts[0] == (ISTANBUL.latitude, ISTANBUL.longitude)
+
+
+async def test_geosearch_runs_at_many_points_and_dedupes(monkeypatch):
+    calls = []
+    patch_all(monkeypatch, {"wikipedia": WIKI_ISTANBUL}, calls)
+    places = await find_attractions(ISTANBUL)
+    geo_calls = [p for _u, p in calls if (p or {}).get("list") == "geosearch"]
+    assert len(geo_calls) == 13 and len({p["gscoord"] for p in geo_calls}) == 13
+    names = [p.name for p in places]
+    assert len(names) == len(set(names))  # same page found from several points counted once
+
+
+async def test_geosearch_partial_failure_is_tolerated(monkeypatch):
+    state = {"n": 0}
+
+    async def fake(url, params=None, **kw):
+        if (params or {}).get("list") == "geosearch":
+            state["n"] += 1
+            if state["n"] % 2 == 0:
+                raise ProviderError("flaky")
+        return WIKI_ISTANBUL(params)
+
+    monkeypatch.setattr("app.tools.places.fetch_json", fake)
+    names = {p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live}
+    assert "Hagia Sophia" in names
+
+
+async def test_event_and_year_pages_are_not_attractions(monkeypatch):
+    geo = [("Hagia Sophia", 41.0086, 28.9802), ("1999 Izmit earthquake", 41.0, 28.9),
+           ("Istanbul bombings", 41.0, 28.9), ("List of mosques in Istanbul", 41.0, 28.9),
+           ("Sultanahmet Incident", 41.0, 28.9), ("Great Fire of Constantinople", 41.0, 28.9)]
+    pages = [wiki_page("Hagia Sophia", "Mosque in Istanbul", 900_000, 41.0086, 28.9802)] + [
+        wiki_page(t, "Museum of something", 90_000, 41.0, 28.9) for t, *_ in geo[1:]]
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
+    live = [p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
+    assert live == ["Hagia Sophia"]
+
+
+async def test_description_marking_an_event_is_filtered(monkeypatch):
+    geo = [("Hagia Sophia", 41.0086, 28.9802), ("Sultanahmet Explosion", 41.0, 28.9)]
+    pages = [wiki_page("Hagia Sophia", "Mosque in Istanbul", 900_000, 41.0086, 28.9802),
+             wiki_page("Sultanahmet Explosion", "2016 terrorist attack in Istanbul museum", 50_000, 41.0, 28.9)]
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
+    live = [p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
+    assert live == ["Hagia Sophia"]
+
+
+async def test_obscure_pages_dropped_when_enough_good_places_exist(monkeypatch):
+    names = [f"Great Museum {c}" for c in "ABCDEFGHIJ"]
+    geo = [(n, 41.0 + i * 0.001, 28.95) for i, n in enumerate(names)] + [("Tiny Chapel", 41.02, 28.95)]
+    pages = [wiki_page(n, "Museum in Istanbul", 50_000, 41.0, 28.95) for n in names]
+    pages.append(wiki_page("Tiny Chapel", "Small chapel in Istanbul", 40, 41.02, 28.95))
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
+    live = {p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live}
+    assert "Tiny Chapel" not in live and len(live) == 10
+
+
+async def test_obscure_pages_backfill_when_too_few_good_places(monkeypatch):
+    geo = [("Great Museum", 41.0, 28.95), ("Tiny Chapel", 41.02, 28.95), ("Small Church", 41.03, 28.95)]
+    pages = [wiki_page("Great Museum", "Museum in Istanbul", 50_000, 41.0, 28.95),
+             wiki_page("Tiny Chapel", "Small chapel in Istanbul", 40, 41.02, 28.95),
+             wiki_page("Small Church", "Church in Istanbul", 30, 41.03, 28.95)]
+    patch_all(monkeypatch, {"wikipedia": wiki_response(geo=geo, pages=pages)})
+    live = [p.name for p in await find_attractions(ISTANBUL) if p.source == DataSource.live]
+    assert live[0] == "Great Museum" and len(live) == 3 and MIN_GOOD_PLACES >= 3

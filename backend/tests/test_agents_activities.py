@@ -2,6 +2,7 @@ from datetime import time, timedelta
 
 from app.agents import ActivitiesAgent, Constraints
 from app.agents.activities import day_windows, interest_categories, is_rainy
+from app.models.plan import DataSource
 from app.models.request import Pace, TripPreferences
 from app.tools.weather import DayWeather
 from tests.agent_helpers import default_places, fake_llm, make_ctx, place
@@ -84,6 +85,11 @@ async def test_rainy_day_prefers_indoor_and_dry_day_prefers_outdoor():
     wet = await ActivitiesAgent().propose(ctx, BIG)
     assert wet.days[0].items[0].name == "Indoor Museum"
     assert "Rain expected" in wet.days[0].notes
+
+    est = await make_ctx(attractions=places, preferences=TripPreferences(pace=Pace.relaxed))
+    est.data.weather = [w.model_copy(update={"source": DataSource.estimated}) for w in rain_on(est, 0)]
+    soft = await ActivitiesAgent().propose(est, BIG)
+    assert "Rain is likely" in soft.days[0].notes and "Rain expected" not in soft.days[0].notes
 
     ctx2 = await make_ctx(attractions=places, preferences=TripPreferences(pace=Pace.relaxed))
     dry = await ActivitiesAgent().propose(ctx2, BIG)

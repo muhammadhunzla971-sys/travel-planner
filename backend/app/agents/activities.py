@@ -225,7 +225,10 @@ class ActivitiesAgent(BaseAgent):
                     t = 810
 
             if rainy:
-                plan.notes = "Rain expected - indoor places are prioritised."
+                if w is not None and w.source == DataSource.estimated:
+                    plan.notes = "Rain is likely (typical weather for these dates) - indoor places are prioritised."
+                else:
+                    plan.notes = "Rain expected - indoor places are prioritised."
             if not plan.items:
                 plan.notes = (plan.notes + " " if plan.notes else "") + "Free day - nothing fitted the time or budget."
             days.append(plan)

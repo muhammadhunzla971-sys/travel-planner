@@ -1,9 +1,10 @@
 """Things to see near the destination.
 
 Live provider: Wikipedia (free, no key), in three small steps:
-  1. geosearch  - up to 500 geotagged pages within 10 km of the city centre
+  1. geosearch  - geotagged pages around a grid of ~13 sample points (up to 500 each), so famous
+                  places a few km from the centre are not lost in the dense old town
   2. category   - "Category:Tourist attractions in <city>" (curated by editors; may not exist)
-  3. details    - short description + page views (last 30 days) for up to 300 candidates,
+  3. details    - short description + page views (last 30 days) for up to 600 candidates,
                   in batches of 50 titles
 Ranking = popularity (page views) + curated-category bonus + a little for category/closeness,
 so Hagia Sophia beats an obscure chapel that merely sits closer to the centre point.
@@ -25,10 +26,13 @@ from app.tools.http import ProviderError, fetch_json
 
 WIKI_URL = "https://en.wikipedia.org/w/api.php"
 PLACES_TTL = 24 * 3600
-GEO_RADIUS_M = 10_000
-GEO_LIMIT = 500
+GEO_RADIUS_M = 2_500       # per sample point
+GEO_LIMIT = 500            # per sample point
+RING_KM = (3.0, 6.0)       # sample rings around the centre
 CATEGORY_LIMIT = 200
-MAX_CANDIDATES = 300
+MAX_CANDIDATES = 600
+MIN_VIEWS = 500            # below this (30 days) a page is "obscure" - used only to fill gaps
+MIN_GOOD_PLACES = 8
 BATCH = 50
 DEFAULT_LIMIT = 30
 
@@ -37,7 +41,12 @@ _SKIP_WORDS = ("school", "college", "university", "hospital", "airport", "statio
                "neighbourhood", "neighborhood", "municipality", "province", "railway", "metro",
                "highway", "road", "street", "avenue", "stadium", "cemetery", "company", "bank",
                "battle", "siege", "fall", "treaty", "line", "tunnel", "ministry", "embassy")
-_SKIP_RE = re.compile(r"\b(?:" + "|".join(_SKIP_WORDS) + r")\b", re.IGNORECASE)
+_EVENT_WORDS = ("earthquake", "massacre", "bombing", "bombings", "fire", "riot", "riots", "attack",
+                "coup", "protest", "protests", "revolt", "uprising", "assassination", "shooting",
+                "flood", "plague", "pogrom", "incident", "crisis", "election", "census", "strike",
+                "history of", "list of", "timeline", "conquest", "occupation")
+_SKIP_RE = re.compile(r"\b(?:" + "|".join((*_SKIP_WORDS, *_EVENT_WORDS)) + r")\b", re.IGNORECASE)
+_NUMBER_RE = re.compile(r"\b\d{3,4}\b")  # "1999 Izmit earthquake", "1766 ..." - events, not sights
 
 # if the short description says this, the page is an area / person / event, not a sight
 _NOT_A_SIGHT = ("neighbourhood", "neighborhood", "district", "municipality", "suburb", "village",
@@ -45,7 +54,8 @@ _NOT_A_SIGHT = ("neighbourhood", "neighborhood", "district", "municipality", "su
                 "commune", "county", "borough", "footballer", "politician", "actor", "singer",
                 "album", "film", "television", "newspaper", "football club", "sports club",
                 "company", "university", "school", "hospital", "railway", "metro station",
-                "born ", "battle", "siege")
+                "born ", "battle", "siege", "earthquake", "massacre", "terrorist", "bombing",
+                "attack", "riot", "protest", "uprising", "historical period", "treaty")
 
 _CATEGORY_WORDS = [
     ("museum", ("museum", "gallery", "exhibition")),
@@ -101,6 +111,25 @@ def generic_activities(dest: GeoPoint) -> list[Place]:
                   source=DataSource.estimated) for n, c in items]
 
 
+def _title_ok(title: str, dest: GeoPoint) -> bool:
+    if title.strip().lower() == dest.name.strip().lower():
+        return False
+    return not (_SKIP_RE.search(title) or _NUMBER_RE.search(title))
+
+
+def _sample_points(dest: GeoPoint) -> list[tuple[float, float]]:
+    """Centre + 8 points on a 3 km ring + 4 points on a 6 km ring (13 total)."""
+    pts = [(dest.latitude, dest.longitude)]
+    km_lat = 111.0
+    km_lon = max(111.0 * math.cos(math.radians(dest.latitude)), 1.0)
+    for ring, n in zip(RING_KM, (8, 4), strict=True):
+        for k in range(n):
+            ang = 2 * math.pi * k / n
+            pts.append((round(dest.latitude + ring * math.cos(ang) / km_lat, 5),
+                        round(dest.longitude + ring * math.sin(ang) / km_lon, 5)))
+    return pts
+
+
 def _rank_score(place: Place) -> float:
     views = place.popularity or 0
     return (3.0 * math.log10(views + 10) + _CATEGORY_BONUS.get(place.category, 0.0)
@@ -111,12 +140,28 @@ def _rank_score(place: Place) -> float:
 _BASE = {"action": "query", "format": "json", "formatversion": 2}
 
 
-async def _geosearch(dest: GeoPoint) -> list[dict[str, Any]]:
+async def _geosearch_point(lat: float, lon: float) -> list[dict[str, Any]]:
     data = await fetch_json(WIKI_URL, {
-        **_BASE, "list": "geosearch", "gscoord": f"{dest.latitude}|{dest.longitude}",
+        **_BASE, "list": "geosearch", "gscoord": f"{lat}|{lon}",
         "gsradius": GEO_RADIUS_M, "gslimit": GEO_LIMIT, "gsnamespace": 0})
     rows = ((data or {}).get("query") or {}).get("geosearch") or []
     return [r for r in rows if isinstance(r, dict) and r.get("title")]
+
+
+async def _geosearch(dest: GeoPoint) -> list[dict[str, Any]]:
+    """Search around several points and merge. Fails only if EVERY point fails."""
+    results = await asyncio.gather(*[_geosearch_point(la, lo) for la, lo in _sample_points(dest)],
+                                   return_exceptions=True)
+    merged: dict[str, dict[str, Any]] = {}
+    for r in results:
+        if isinstance(r, list):
+            for row in r:
+                merged.setdefault(row["title"], row)
+    if not merged:
+        errors = [r for r in results if isinstance(r, BaseException)]
+        if errors:
+            raise errors[0] if isinstance(errors[0], ProviderError) else ProviderError(str(errors[0]))
+    return list(merged.values())
 
 
 async def _category_titles(dest: GeoPoint) -> list[str]:
@@ -163,11 +208,11 @@ def _build_places(dest: GeoPoint, geo: list[dict[str, Any]], cats: list[str],
     geo_by_title = {g["title"]: g for g in geo}
     curated = set(cats)
     # curated titles first, then the nearest geosearch results, deduplicated, capped
-    titles = list(dict.fromkeys([*cats, *geo_by_title])) [:MAX_CANDIDATES]
+    titles = list(dict.fromkeys([*cats, *geo_by_title]))[:MAX_CANDIDATES]
 
     places: list[Place] = []
     for title in titles:
-        if title.strip().lower() == dest.name.strip().lower() or _SKIP_RE.search(title):
+        if not _title_ok(title, dest):
             continue
         page = details.get(title, {})
         desc = (page.get("description") or "").strip()
@@ -192,7 +237,11 @@ def _build_places(dest: GeoPoint, geo: list[dict[str, Any]], cats: list[str],
             est_entry_usd=_EST_ENTRY_USD.get(category, 0.0), popularity=_views(page),
             curated=is_curated, source=DataSource.live))
     places.sort(key=_rank_score, reverse=True)
-    return places[:limit]
+    # prefer fewer, better places: drop obscure pages unless that would leave too few
+    good = [p for p in places if p.curated or (p.popularity or 0) >= MIN_VIEWS]
+    if len(good) < MIN_GOOD_PLACES:
+        good = places[:max(MIN_GOOD_PLACES, len(good))]
+    return good[:limit]
 
 
 async def _find(dest: GeoPoint, limit: int) -> list[Place]:
@@ -204,14 +253,15 @@ async def _find(dest: GeoPoint, limit: int) -> list[Place]:
         if isinstance(geo_res, BaseException):
             raise geo_res if isinstance(geo_res, ProviderError) else ProviderError(str(geo_res))
         return []
-    candidates = list(dict.fromkeys([*cats, *(g["title"] for g in geo)]))[:MAX_CANDIDATES]
+    ordered = [*cats, *(g["title"] for g in geo)]
+    candidates = [t for t in dict.fromkeys(ordered) if _title_ok(t, dest)][:MAX_CANDIDATES]
     details = await _details(candidates)
     return _build_places(dest, geo, cats, details, limit)
 
 
 async def find_attractions(dest: GeoPoint, limit: int = DEFAULT_LIMIT) -> list[Place]:
     """Live attractions if possible, topped up with generic ones so we always return something."""
-    key = make_key("places-v2", dest.name, round(dest.latitude, 2), round(dest.longitude, 2), limit)
+    key = make_key("places-v3", dest.name, round(dest.latitude, 2), round(dest.longitude, 2), limit)
     try:
         live = await cache.get_or_set(key, PLACES_TTL, lambda: _find(dest, limit))
     except ProviderError:
