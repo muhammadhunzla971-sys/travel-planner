@@ -90,3 +90,23 @@ def test_stream_reports_data_outage_and_crashes_without_hanging(monkeypatch):
 def test_stream_rejects_invalid_requests_normally():
     r = client.post("/api/plan/stream", json=_body(budget=-5))
     assert r.status_code == 422
+
+
+def test_public_config_is_empty_until_supabase_is_configured(monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "")
+    get_settings.cache_clear()
+    assert TestClient(app).get("/api/config").json() == {"supabase_url": None, "supabase_anon_key": None}
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
+    get_settings.cache_clear()
+    assert TestClient(app).get("/api/config").json() == {"supabase_url": "https://x.supabase.co",
+                                                         "supabase_anon_key": "anon"}
+    get_settings.cache_clear()
+
+
+def test_home_page_has_map_accounts_and_meals():
+    html = TestClient(app).get("/").text
+    for needle in ("drawMap", "initAccounts", "saveTrip", "leaflet", "m.slot"):
+        assert needle in html

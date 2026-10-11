@@ -75,11 +75,21 @@ button.go:disabled{opacity:.6;cursor:wait}
 .verdict{font-weight:600}
 .row-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .row-actions button{padding:9px 14px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;cursor:pointer;font:inherit}
-@media print{form,.row-actions,#live{display:none!important}body{background:#fff}}
+#map{height:420px;border-radius:12px;border:1px solid var(--line);margin-top:8px;z-index:0}
+.pin span{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;color:#fff;font:700 12px system-ui;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.item.meal{color:var(--muted)}
+.item.meal .t{color:var(--est);font-size:.8rem}
+.topbar{display:flex;justify-content:flex-end;gap:8px;align-items:center;padding-top:12px;font-size:.88rem;color:var(--muted);flex-wrap:wrap}
+.topbar button,.authbox button{padding:7px 12px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;cursor:pointer;font:inherit}
+.authbox{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end}
+.authbox input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+.authmsg{margin-top:8px;font-size:.88rem;color:var(--muted)}
+@media print{form,.row-actions,#live,.topbar,#auth,#saved,#history,#mapday{display:none!important}body{background:#fff}}
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="topbar hidden" id="acct"></div>
   <header>
     <h1>AI Travel Planner</h1>
     <p class="sub">Tell us your budget, destination and dates. A team of agents (flights, stays, activities and a critic) plans the trip together.</p>
@@ -103,6 +113,18 @@ button.go:disabled{opacity:.6;cursor:wait}
     <button class="go" id="go" type="submit">Plan my trip</button>
     <div class="err hidden" id="err"></div>
   </form>
+
+  <section id="auth" class="card hidden">
+    <h2>Sign in to save your trips</h2>
+    <div class="authbox">
+      <div><label for="email">Email</label><input id="email" type="email" autocomplete="email"></div>
+      <div><label for="password">Password (min 6 characters)</label><input id="password" type="password" autocomplete="current-password"></div>
+      <div class="row-actions" style="margin:0"><button type="button" id="signin">Sign in</button><button type="button" id="signup">Create account</button></div>
+    </div>
+    <div class="authmsg" id="authmsg"></div>
+  </section>
+
+  <section id="saved" class="card hidden"><h2>Your saved trips</h2><div id="saved-list"></div></section>
 
   <section id="history" class="card hidden"><h2>Your recent trips</h2><div id="hist-list"></div></section>
 
@@ -247,6 +269,128 @@ function renderHistory() {
 }
 renderHistory();
 
+
+// ---- load libraries only when needed ----
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script"); el.src = src; el.onload = resolve; el.onerror = () => reject(new Error("load failed: " + src));
+    document.head.appendChild(el);
+  });
+}
+function loadCSS(href) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = href; document.head.appendChild(l); }
+const LEAFLET = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet";
+const DAY_COLORS = ["#0f766e", "#2563eb", "#9333ea", "#db2777", "#ea580c", "#65a30d", "#0891b2", "#b91c1c", "#4f46e5", "#a16207"];
+let theMap = null, dayLayers = {};
+
+async function drawMap(data) {
+  const box = $("map"); if (!box) return;
+  try {
+    if (!window.L) { loadCSS(LEAFLET + ".min.css"); await loadScript(LEAFLET + ".min.js"); }
+  } catch { box.innerHTML = '<p class="note" style="padding:12px">The map could not be loaded (check your connection).</p>'; return; }
+  if (theMap) { theMap.remove(); theMap = null; }
+  const c = data.center || [0, 0];
+  theMap = L.map("map", {scrollWheelZoom: false}).setView(c, 12);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"}).addTo(theMap);
+  dayLayers = {};
+  L.marker(c, {title: "City centre (hotel area is estimated)"}).addTo(theMap).bindPopup("<b>Stay</b><br>City centre (assumed)");
+  data.trip.days.forEach((d) => {
+    const group = L.layerGroup(), color = DAY_COLORS[(d.day_number - 1) % DAY_COLORS.length];
+    d.items.forEach((it, idx) => {
+      if (it.latitude == null || it.longitude == null) return;
+      const icon = L.divIcon({className: "pin", html: `<span style="background:${color}">${idx + 1}</span>`, iconSize: [24, 24], iconAnchor: [12, 12]});
+      L.marker([it.latitude, it.longitude], {icon}).bindPopup(`<b>${esc(it.name)}</b><br>Day ${d.day_number} &middot; ${hhmm(it.start_time)}`).addTo(group);
+    });
+    (d.meals || []).forEach((m) => {
+      L.circleMarker([m.latitude, m.longitude], {radius: 6, color: "#ea580c", fillColor: "#fb923c", fillOpacity: .9, weight: 2})
+        .bindPopup(`<b>${esc(m.name)}</b><br>${m.slot === "lunch" ? "Lunch" : "Dinner"} &middot; Day ${d.day_number}`).addTo(group);
+    });
+    dayLayers[d.day_number] = group; group.addTo(theMap);
+  });
+  const fit = () => {
+    const pts = [];
+    Object.entries(dayLayers).forEach(([n, g]) => { if (theMap.hasLayer(g)) g.eachLayer((l) => pts.push(l.getLatLng())); });
+    if (pts.length) theMap.fitBounds(L.latLngBounds(pts).pad(0.15)); else theMap.setView(c, 12);
+  };
+  fit();
+  $("mapday").onchange = () => {
+    const v = $("mapday").value;
+    Object.entries(dayLayers).forEach(([n, g]) => { (v === "all" || v === n) ? g.addTo(theMap) : theMap.removeLayer(g); });
+    fit();
+  };
+  setTimeout(() => theMap && theMap.invalidateSize(), 200);
+}
+
+// ---- accounts + saved trips (Supabase; only active when the site owner has configured it) ----
+let sb = null, user = null;
+const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js";
+
+function setUser(u) {
+  user = u;
+  const bar = $("acct"); bar.classList.remove("hidden");
+  bar.innerHTML = u
+    ? `<span>${esc(u.email)}</span><button type="button" id="signout">Sign out</button>`
+    : `<button type="button" id="showauth">Sign in / Sign up</button>`;
+  if (u) { $("signout").onclick = async () => { await sb.auth.signOut(); }; $("auth").classList.add("hidden"); loadSaved(); }
+  else { $("showauth").onclick = () => $("auth").classList.toggle("hidden"); $("saved").classList.add("hidden"); }
+}
+function authMsg(t) { $("authmsg").textContent = t; }
+
+async function initAccounts() {
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    if (!cfg.supabase_url || !cfg.supabase_anon_key) return;
+    await loadScript(SUPABASE_JS);
+    sb = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
+    const {data} = await sb.auth.getSession();
+    setUser(data.session ? data.session.user : null);
+    sb.auth.onAuthStateChange((_e, session) => setUser(session ? session.user : null));
+    if (lastData) $("save").classList.remove("hidden");
+    $("signin").onclick = async () => {
+      authMsg("Signing in...");
+      const {error} = await sb.auth.signInWithPassword({email: $("email").value.trim(), password: $("password").value});
+      authMsg(error ? error.message : "");
+    };
+    $("signup").onclick = async () => {
+      authMsg("Creating account...");
+      const {data: d, error} = await sb.auth.signUp({email: $("email").value.trim(), password: $("password").value});
+      if (error) authMsg(error.message);
+      else authMsg(d.session ? "" : "Account created. Check your email to confirm it, then sign in.");
+    };
+  } catch (e) { console.warn("accounts unavailable", e); }
+}
+
+function slimForSave(data) {
+  return {...data, timeline: [], trip: {...data.trip, messages: [], flight_options: [], stay_options: []}};
+}
+async function saveTrip(data) {
+  if (!user) { $("auth").classList.remove("hidden"); $("auth").scrollIntoView({behavior: "smooth"}); authMsg("Sign in first, then press Save trip again."); return; }
+  const r = data.trip.request, btn = $("save");
+  btn.disabled = true; btn.textContent = "Saving...";
+  const {error} = await sb.from("trips").insert({
+    destination: r.destination, start_date: r.start_date, end_date: r.end_date,
+    total_cost: data.breakdown.total_cost, currency: r.currency, data: slimForSave(data)});
+  btn.textContent = error ? "Could not save" : "Saved!";
+  if (error) console.warn(error); else loadSaved();
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Save trip"; }, 2500);
+}
+async function loadSaved() {
+  if (!sb || !user) return;
+  const {data, error} = await sb.from("trips").select("id,created_at,destination,start_date,end_date,total_cost,currency")
+    .order("created_at", {ascending: false}).limit(30);
+  if (error) { console.warn(error); return; }
+  $("saved").classList.toggle("hidden", !data.length);
+  $("saved-list").innerHTML = data.map((t) => `<div class="kv"><span>${esc(t.destination)} &middot; ${esc(t.start_date)} to ${esc(t.end_date)} &middot; ${money(t.total_cost, t.currency)}</span>
+    <span><button type="button" class="open-s" data-id="${esc(t.id)}">Open</button> <button type="button" class="del-s" data-id="${esc(t.id)}">Delete</button></span></div>`).join("");
+  document.querySelectorAll(".open-s").forEach((b) => b.onclick = async () => {
+    const {data: row, error: e2} = await sb.from("trips").select("data").eq("id", b.dataset.id).single();
+    if (!e2 && row) { render(row.data); $("result").scrollIntoView({behavior: "smooth"}); }
+  });
+  document.querySelectorAll(".del-s").forEach((b) => b.onclick = async () => {
+    if (!confirm("Delete this saved trip?")) return;
+    await sb.from("trips").delete().eq("id", b.dataset.id); loadSaved();
+  });
+}
+
 function render(data) {
   const t = data.trip, req = t.request, cur = req.currency, br = data.breakdown;
   const src = data.data_sources || {};
@@ -266,8 +410,11 @@ function render(data) {
     const items = d.items.map((i) => `<div class="item"><span class="t">${hhmm(i.start_time)}</span>
       <span>${esc(i.name)}<br><small>${esc(i.category)} &middot; ${i.duration_minutes} min${i.area ? " &middot; " + esc(i.area) : ""}</small></span>
       <span class="c">${i.cost > 0 ? money(i.cost, cur) : "Free"}</span></div>`).join("");
+    const meals = (d.meals || []).map((m) => `<div class="item meal"><span class="t">${m.slot === "lunch" ? "Lunch" : "Dinner"}</span>
+      <span>${esc(m.name)}<br><small>${esc(m.cuisine || "restaurant")}${m.area ? " &middot; " + esc(m.area) : ""}${m.matches_diet === true ? " &middot; matches your diet" : m.matches_diet === false ? " &middot; diet not confirmed" : ""}</small></span>
+      <span class="c">${/^https?:\/\//.test(m.website || "") ? `<a href="${esc(m.website)}" target="_blank" rel="noopener noreferrer">website</a>` : ""}</span></div>`).join("");
     return `<div class="day"><h3>Day ${d.day_number} &middot; ${esc(d.date)}</h3>
-      ${d.notes ? `<div class="note">${esc(d.notes)}</div>` : ""}${items || ""}</div>`;
+      ${d.notes ? `<div class="note">${esc(d.notes)}</div>` : ""}${items || ""}${meals}</div>`;
   }).join("");
 
   const warns = (data.review.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join("");
@@ -298,13 +445,18 @@ function render(data) {
   <div class="card"><h2>Budget breakdown</h2>${bars}
     <div class="note">Bar = actual cost. Dark line = planned share.</div>
     <div class="verdict">${esc(data.review.verdict || "")}</div>${warns}</div>
+  <div class="card"><h2>Map</h2>
+    <select id="mapday"><option value="all">All days</option>${t.days.filter((d) => d.items.length || (d.meals || []).length).map((d) => `<option value="${d.day_number}">Day ${d.day_number}</option>`).join("")}</select>
+    <div id="map"></div><div class="note">Numbers = sights in order (colour = day). Orange dots = suggested restaurants. The hotel pin sits at the city centre because hotel locations are estimated.</div></div>
   <div class="card"><h2>Day by day</h2>${days}</div>
   <div class="card"><h2>Data sources</h2><div class="note">Live = fetched from a real provider now. Estimated = typical prices, check before booking.</div>${srcPills}
-    <div class="row-actions"><button type="button" id="share">Copy share link</button><button type="button" id="ics">Add to calendar (.ics)</button><button type="button" id="print">Print / save as PDF</button><button type="button" id="again">Plan another trip</button></div></div>`;
+    <div class="row-actions"><button type="button" id="save" class="hidden">Save trip</button><button type="button" id="share">Copy share link</button><button type="button" id="ics">Add to calendar (.ics)</button><button type="button" id="print">Print / save as PDF</button><button type="button" id="again">Plan another trip</button></div></div>`;
   $("result").classList.remove("hidden");
   $("print").onclick = () => window.print();
   $("ics").onclick = () => downloadICS(data);
   $("share").onclick = () => shareLink(data);
+  if (sb) { $("save").classList.remove("hidden"); $("save").onclick = () => saveTrip(data); }
+  drawMap(data);
   lastData = data;
   $("again").onclick = () => { $("result").classList.add("hidden"); $("live").classList.add("hidden"); window.scrollTo({top: 0, behavior: "smooth"}); };
 }
@@ -366,6 +518,7 @@ $("form").addEventListener("submit", async (e) => {
   }
 });
 openSharedTrip();
+initAccounts();
 </script>
 </body>
 </html>

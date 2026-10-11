@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     llm_enabled: bool = True      # kill switch: LLM_ENABLED=false -> rule-based only
     llm_timeout_s: float = 8.0    # per LLM call (serverless functions are short-lived)
 
+    # Optional accounts + saved trips (Supabase). Both values are PUBLIC by design (anon key is
+    # protected by row-level security); leave empty to hide the sign-in UI.
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

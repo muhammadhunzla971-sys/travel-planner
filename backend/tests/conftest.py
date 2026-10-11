@@ -42,3 +42,15 @@ def _no_real_llm(monkeypatch):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_restaurant_lookup(monkeypatch):
+    """Restaurant data comes from Overpass; tests must not hit it (override with patch_all)."""
+    from app.tools.http import ProviderError
+
+    async def down(url, params=None, **kw):
+        raise ProviderError("overpass blocked in tests")
+
+    monkeypatch.setattr("app.tools.restaurants.fetch_json", down)
+    yield

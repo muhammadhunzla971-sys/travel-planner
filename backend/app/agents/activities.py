@@ -215,7 +215,7 @@ class ActivitiesAgent(BaseAgent):
                     id=f"act-{_slug(p.name)}", name=p.name, category=p.category,
                     start_time=_to_time(t), duration_minutes=duration, cost=cost,
                     area=f"{p.distance_km} km from centre" if p.distance_km is not None else None,
-                    notes=fee_note,
+                    notes=fee_note, latitude=p.latitude, longitude=p.longitude,
                     source=DataSource.estimated if cost > 0 else p.source))
                 spent += cost
                 remaining.remove(p)

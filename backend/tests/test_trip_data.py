@@ -110,7 +110,7 @@ def test_tools_preview_endpoint_works_even_when_providers_are_down(monkeypatch):
     data = r.json()
     assert data["destination"]["name"] == "Istanbul"
     assert set(data["sources"]) == {"destination", "exchange_rate", "weather", "attractions",
-                                    "flights", "stays"}
+                                    "restaurants", "flights", "stays"}
     assert len(data["flights"]) == 3 and data["warnings"]
 
 

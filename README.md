@@ -28,13 +28,18 @@ Browser (/)  --POST /api/plan/stream-->  FastAPI on Vercel
 ## Features
 - Live agent conversation (Server-Sent Events), budget bars, day-by-day plan
 - Add to calendar (.ics), print / save as PDF, **shareable link** (the trip is packed into the URL), recent trips (stored in your browser)
-- 184 automated tests, GitHub Actions CI (`ruff` + `pytest`)
+- **Map** (Leaflet + OpenStreetMap): numbered sights per day, restaurants, day filter
+- **Restaurants**: lunch/dinner suggestions near each day's sights (OpenStreetMap data); honours dietary needs such as halal / vegetarian when OSM confirms them
+- **Accounts + saved trips** (optional, Supabase free plan): sign up, save, reopen and delete trips. Setup: `docs/supabase_schema.sql`,
+  then set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Vercel
+- 193 automated tests, GitHub Actions CI (`ruff` + `pytest`)
 
 ## Endpoints
 - `GET /` website, `GET /docs` Swagger, `GET /health`, `GET /version`
 - `POST /api/plan` full planner, `POST /api/plan/stream` same with live progress (SSE)
 - `POST /api/budget/preview`, `POST /api/tools/preview`, `POST /api/agents/preview` (step-by-step debugging)
 - `GET /api/places/debug?city=Istanbul` shows what Wikipedia returned and why places were kept or dropped
+- `GET /api/config` public site settings (accounts on/off, never secrets)
 - `GET /api/llm/check` is the Groq key working? (never shows the key)
 
 ## Environment variables
@@ -57,9 +62,9 @@ ruff check . && pytest -q
 
 ## Known limits
 - Flight and hotel prices are estimates (no free live fare API). Check before booking.
-- Restaurants are not planned yet; food + transport is a budget estimate.
+- Restaurant data has no prices or ratings (OpenStreetMap); meal costs stay inside the "food + transport" estimate.
 - Serverless memory cache is best-effort; Vercel Hobby has a function time limit (planning normally takes 5-20 s).
 
 ## Ideas for later
-Real flight/hotel API (Amadeus/Duffel free tiers need sign-up), user accounts + saved trips in a free database
-(Neon/Supabase), restaurant suggestions, map view.
+Real flight/hotel API (Amadeus/Duffel free tiers need sign-up), hotel locations on the map, editing a trip (drag to reorder),
+sharing a saved trip with friends.

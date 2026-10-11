@@ -58,6 +58,8 @@ class ActivityItem(BaseModel):
     cost: float = Field(default=0, ge=0)
     area: str | None = None
     notes: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     source: DataSource = DataSource.estimated
 
     @property
@@ -65,6 +67,18 @@ class ActivityItem(BaseModel):
         if self.start_time is None:
             return None
         return self.start_time.hour * 60 + self.start_time.minute + self.duration_minutes
+
+
+class MealSuggestion(BaseModel):
+    slot: str  # lunch | dinner
+    name: str
+    cuisine: str | None = None
+    area: str | None = None
+    latitude: float
+    longitude: float
+    matches_diet: bool | None = None  # None = no dietary need given
+    website: str | None = None
+    source: DataSource = DataSource.live
 
 
 class DayPlan(BaseModel):
@@ -75,6 +89,7 @@ class DayPlan(BaseModel):
     usable_from: time | None = None
     usable_until: time | None = None
     notes: str | None = None
+    meals: list[MealSuggestion] = Field(default_factory=list)
 
     def cost(self) -> float:
         return round(sum(i.cost for i in self.items), 2)

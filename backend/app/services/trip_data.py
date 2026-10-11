@@ -21,6 +21,7 @@ from app.tools.geo import GeoPoint, geocode
 from app.tools.hotels import search_stays
 from app.tools.http import ProviderError
 from app.tools.places import Place, find_attractions
+from app.tools.restaurants import Restaurant, find_restaurants
 from app.tools.weather import DayWeather, get_weather, summarize_weather
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class TripData(BaseModel):
     weather: list[DayWeather]
     weather_summary: str
     attractions: list[Place]
+    restaurants: list[Restaurant] = []
     flights: list[FlightOption]
     stays: list[StayOption]
     food_transport_estimate: float  # whole trip, in the request currency
@@ -85,10 +87,11 @@ async def gather_trip_data(request: TripRequest) -> TripData:
     else:
         warnings.append("No origin city given, so flight options were skipped.")
 
-    weather, attractions, flights, stays = await asyncio.gather(
+    weather, attractions, restaurants, flights, stays = await asyncio.gather(
         _safe(get_weather(dest.latitude, dest.longitude, request.start_date, request.end_date),
               [], "Weather", warnings),
         _safe(find_attractions(dest), [], "Attractions", warnings),
+        _safe(find_restaurants(dest), [], "Restaurants", warnings),
         _safe(search_flights(request, origin, dest, fx), [], "Flights", warnings),
         _safe(search_stays(request, dest, fx), [], "Stays", warnings),
     )
@@ -102,6 +105,7 @@ async def gather_trip_data(request: TripRequest) -> TripData:
         "exchange_rate": fx.source.value,
         "weather": weather[0].source.value if weather else "unavailable",
         "attractions": "live" if any(p.source.value == "live" for p in attractions) else "estimated",
+        "restaurants": "live" if restaurants else "unavailable",
         "flights": flights[0].source.value if flights else "unavailable",
         "stays": stays[0].source.value if stays else "unavailable",
     }
@@ -112,6 +116,6 @@ async def gather_trip_data(request: TripRequest) -> TripData:
         destination=dest, origin=origin, fx=fx, cost_level=level,
         allocation=allocate_budget(request, level),  # type: ignore[arg-type]
         weather=weather, weather_summary=summarize_weather(weather),
-        attractions=attractions, flights=flights, stays=stays,
+        attractions=attractions, restaurants=restaurants, flights=flights, stays=stays,
         food_transport_estimate=food_total, sources=sources, warnings=warnings,
     )

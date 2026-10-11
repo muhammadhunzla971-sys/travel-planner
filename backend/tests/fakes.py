@@ -11,6 +11,7 @@ PATCH_TARGETS = (
     "app.tools.currency.fetch_json",
     "app.tools.weather.fetch_json",
     "app.tools.places.fetch_json",
+    "app.tools.restaurants.fetch_json",
 )
 
 

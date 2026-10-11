@@ -34,6 +34,7 @@ from app.agents.prompts import SUMMARY_SYSTEM
 from app.models.messages import AgentMessage, AgentName, MessageType, make_message
 from app.models.request import TripRequest
 from app.models.state import TripState, TripStatus
+from app.services.meals import plan_meals
 from app.services.negotiation import BudgetBreakdown, build_breakdown, squeeze_targets
 from app.services.trip_data import TripData, gather_trip_data
 
@@ -68,6 +69,7 @@ class PlanResult(BaseModel):
     timeline: list[TimelineEvent]
     data_sources: dict[str, str]
     data_warnings: list[str]
+    center: tuple[float, float] | None = None  # destination centre, for the map
 
 
 EventCallback = Callable[[TimelineEvent], Awaitable[None] | None]
@@ -282,6 +284,9 @@ class Orchestrator:
         _narrated, final_review, summary = await asyncio.gather(
             narrate_task, self.critic.review(state, ctx, waived), self._summarize(state, ctx, notes))
 
+        centre = (data.destination.latitude, data.destination.longitude)
+        plan_meals(state.days, data.restaurants, centre, state.request.preferences.dietary_needs)
+
         state.conflicts = final_review.conflicts
         extra = []
         if not final_review.approved:
@@ -298,7 +303,7 @@ class Orchestrator:
                          f"{final_review.verdict}")
         return PlanResult(trip=state, summary=summary, review=final_review, breakdown=build_breakdown(state),
                           rounds=state.iteration, timeline=self.timeline, data_sources=data.sources,
-                          data_warnings=data.warnings)
+                          data_warnings=data.warnings, center=centre)
 
     async def _summarize(self, state: TripState, ctx: AgentContext, notes: list[str]) -> PlanSummary:
         req = state.request

@@ -61,6 +61,15 @@ async def places_debug(city: str = "Istanbul") -> dict:
     return await diagnose(dest)
 
 
+@router.get("/config")
+async def public_config() -> dict:
+    """Public settings the website needs (never secrets). Accounts are off unless configured."""
+    from app.config import get_settings
+
+    cfg = get_settings()
+    return {"supabase_url": cfg.supabase_url or None, "supabase_anon_key": cfg.supabase_anon_key or None}
+
+
 @router.get("/llm/check")
 async def llm_health() -> dict:
     """Is the Groq key configured and working? (Never returns the key.)"""
