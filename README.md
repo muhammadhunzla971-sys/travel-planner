@@ -21,25 +21,27 @@
 ## Table of contents
 1. [What it does](#what-it-does)
 2. [Features](#features)
-3. [How it works](#how-it-works)
-4. [The agents](#the-agents)
-5. [Design decisions](#design-decisions)
-6. [Data sources](#data-sources)
-7. [Reliability and security](#reliability-and-security)
-8. [Tech stack](#tech-stack)
-9. [Project structure](#project-structure)
-10. [API reference](#api-reference)
-11. [Configuration](#configuration)
-12. [Run locally](#run-locally)
-13. [Tests and CI](#tests-and-ci)
-14. [Deploy free](#deploy-free)
-15. [Demo script](#demo-script)
-16. [Screenshots](#screenshots)
+3. [Screenshots](#screenshots)
+4. [How it works](#how-it-works)
+5. [The agents](#the-agents)
+6. [Design decisions](#design-decisions)
+7. [Data sources](#data-sources)
+8. [Reliability and security](#reliability-and-security)
+9. [Tech stack](#tech-stack)
+10. [Project structure](#project-structure)
+11. [API reference](#api-reference)
+12. [Configuration](#configuration)
+13. [Run locally](#run-locally)
+14. [Tests and CI](#tests-and-ci)
+15. [Deploy free](#deploy-free)
+16. [Demo script](#demo-script)
 17. [Known limits](#known-limits)
 18. [Roadmap](#roadmap)
 19. [Skills demonstrated](#skills-demonstrated)
 20. [Credits and data licences](#credits-and-data-licences)
 21. [Author](#author)
+
+---
 
 ## What it does
 A traveller enters a **budget, destination and dates** (plus optional style, pace, interests and dietary needs).
@@ -72,6 +74,33 @@ budget breakdown that compares each agent's planned share with what it actually 
 | **Share and export** | Shareable link (the trip is packed into the URL, no server storage), calendar export (`.ics`), print / save as PDF, recent trips |
 | **Resilient by design** | If the LLM or any data provider fails, rule-based fallbacks keep the planner working |
 | **Quality** | 199 automated tests (no network, no LLM needed), `ruff` linting, GitHub Actions CI |
+
+## Screenshots
+Real screenshots of the live app (Istanbul, 2 travellers, halal).
+
+**Plan a trip:** budget, dates, style, pace, interests and dietary needs, plus your saved and recent trips.
+
+![Trip form and saved trips](docs/images/form.png)
+
+**Result:** estimated flight and stay, the budget breakdown (bar = actual cost, dark line = planned share) and the Critic's warnings, including the halal note.
+
+![Flight, stay and budget breakdown](docs/images/plan.png)
+
+**Interactive map:** numbered sights per day (colour = day), orange dots for suggested restaurants, day filter.
+
+![Interactive map](docs/images/map.png)
+
+**Day by day:** rain-aware order, timings that follow the flight, and lunch and dinner next to the day's sights.
+
+![Day by day plan](docs/images/day-by-day.png)
+
+**Data sources and actions:** every provider is marked `live` or `estimated`; save, share link, calendar export and print.
+
+![Data sources and actions](docs/images/data-sources.png)
+
+**Accounts:** signed-in users get saved trips (Supabase, row-level security) and recent trips; the live agent feed starts below them.
+
+![Saved trips and the start of the agent feed](docs/images/accounts-and-feed.png)
 
 ## How it works
 
@@ -305,21 +334,6 @@ ruff check . && pytest -q
 5. Open the map, filter one day, and show the restaurant dots and the "diet not confirmed" note.
 6. **Save trip**, **Copy share link** (open it in a new tab), export the **.ics** file.
 7. Try a tiny budget (300 USD) to see the infeasible-budget handling.
-
-## Screenshots
-Add your own screenshots to `docs/images/`, then remove the `<!--` and `-->` lines below so they show up.
-
-| File | What to capture |
-|---|---|
-| `docs/images/feed.png` | The live agent feed while the Critic objects |
-| `docs/images/plan.png` | Result: budget bars and the day-by-day plan |
-| `docs/images/map.png` | The map with numbers and orange restaurant dots |
-
-<!--
-![Live agent feed](docs/images/feed.png)
-![Plan and budget](docs/images/plan.png)
-![Map](docs/images/map.png)
--->
 
 ## Known limits
 - **Flights and hotels are estimates** (no free live fare API). Always check before booking.
